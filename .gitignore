@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# pipeline output
+runs/
+cache/
+out.mp4
+*.wav
+*.mp3

@@ -1,0 +1,45 @@
+[project]
+name = "narrator"
+version = "0.1.0"
+description = "Turn a text story into a narrated video."
+requires-python = ">=3.12"
+dependencies = [
+    "click>=8.1",
+]
+
+[project.optional-dependencies]
+# Installed per-module as the pipeline grows; kept out of the default install
+# so the test suite stays fast and offline.
+tts = ["kokoro>=0.9", "soundfile>=0.12"]
+align = ["faster-whisper>=1.0"]
+visuals = ["httpx>=0.27"]
+
+[project.scripts]
+narrator = "narrator.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["narrator"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not slow' -q"
+markers = [
+    "slow: hits a real model or the network; excluded from the default run",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
