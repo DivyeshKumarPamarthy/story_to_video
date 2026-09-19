@@ -70,6 +70,32 @@ stays fast.
 - `ffmpeg` and `ffprobe` from Homebrew, on PATH.
 - Run things with `uv run pytest`, `uv run narrator ...`.
 
+## Workflow
+
+Work directly on `main`. No per-module branches.
+
+- Commit as often as useful while a module is in progress — small, green-ish
+  steps, message says what changed.
+- When a module is implemented, its tests pass, and it has been reviewed, tag
+  it: `p1` for `segment.py`, `p2` for `speech.py`, and so on through `p8`.
+- The tag is the checkpoint. If a later module breaks something, `git diff p3..`
+  is the question to ask.
+- One module per session. Start a fresh session for each prompt (P1, P2, ...)
+  so context from finished modules does not leak into the next one — that is
+  what causes stray edits to files that were already done.
+
+| Tag | Module |
+|---|---|
+| `p0` | scaffold, Beat contract, tooling |
+| `p1` | `segment.py` |
+| `p2` | `speech.py` |
+| `p3` | `align.py` |
+| `p4` | `visuals/` |
+| `p5` | `captions.py` |
+| `p6` | `assemble.py` |
+| `p7` | `pipeline.py` + `cli.py` |
+| `p8` | end-to-end verification pass |
+
 ## Output formats
 
 Both aspect ratios are supported, driven by config — never hardcode a
