@@ -171,10 +171,24 @@ and the fix, so it is not rediscovered three modules later.
 - **`zoompan` counts in frames, not seconds.** `d` is the number of output
   frames per input frame, so it is `seconds * fps`, and the zoom step has to
   be divided by that same frame count to land on the target zoom at the end.
+- **`amix` divides by the number of inputs unless you say otherwise.**
+  Mixing narration with a music bed at the default settings quietly halves the
+  narration. `amix=inputs=2:duration=first:normalize=0` is the form that
+  leaves the first input alone; `duration=first` also stops a long music track
+  outlasting the story.
+- **`concat` demands identical geometry**, so every clip is put through
+  `scale`/`crop`/`setsar=1`/`fps` before it reaches the concat filter. One
+  mismatched asset would otherwise fail the entire render.
+- **Filter arguments treat `:` and `\` as syntax**, so a file path handed to
+  a filter (the `ass` filter, for one) has to be escaped or a path with a
+  colon in it silently becomes two arguments.
 - **This Homebrew ffmpeg has no libass.** `ffmpeg -filters | grep -w ass`
   returns nothing: the build lacks `--enable-libass` and
   `--enable-libfreetype`, so there is no `ass`, `subtitles` or `drawtext`
-  filter. Burning subtitles needs a different ffmpeg build.
+  filter. Burning subtitles needs a different ffmpeg build. The formula
+  does not even declare libass as a dependency, so reinstalling does not
+  help; it needs a source build or another binary. `assemble.py` detects
+  this and muxes a soft subtitle track instead, with a warning.
 
 ### torch and environment
 

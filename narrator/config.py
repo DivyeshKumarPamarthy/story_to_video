@@ -178,3 +178,42 @@ class CaptionConfig:
         )
         defaults.update(overrides)
         return cls(width=width, height=height, **defaults)  # type: ignore[arg-type]
+
+
+@dataclass(frozen=True)
+class AssembleConfig:
+    """How the final file is encoded and mixed."""
+
+    width: int = 1920
+    height: int = 1080
+    fps: int = 30
+    sample_rate: int = 48000
+    #: Music level relative to narration. Negative: the bed sits under it.
+    music_gain_db: float = -20.0
+    video_codec: str = "libx264"
+    audio_codec: str = "aac"
+    crf: int = 20
+    x264_preset: str = "veryfast"
+    ffmpeg_timeout: float = 900.0
+    #: True makes an ffmpeg without libass a hard failure instead of falling
+    #: back to a soft subtitle track.
+    require_burned_captions: bool = False
+
+    def __post_init__(self) -> None:
+        for name in ("width", "height", "fps", "sample_rate"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be positive, got {getattr(self, name)}")
+        if self.music_gain_db > 0:
+            raise ValueError(
+                f"music_gain_db should be negative (music sits under narration), "
+                f"got {self.music_gain_db}"
+            )
+        if self.ffmpeg_timeout <= 0:
+            raise ValueError(f"ffmpeg_timeout must be positive, got {self.ffmpeg_timeout}")
+
+    @classmethod
+    def preset(cls, name: str, **overrides: object) -> AssembleConfig:
+        if name not in VIDEO_PRESETS:
+            raise ValueError(f"unknown preset {name!r}; expected one of {', '.join(VIDEO_PRESETS)}")
+        width, height = VIDEO_PRESETS[name]
+        return cls(width=width, height=height, **overrides)  # type: ignore[arg-type]

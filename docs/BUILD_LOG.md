@@ -274,3 +274,43 @@ Known limitations:
   wide glyphs can still overflow a narrow frame.
 - The font name is a string the renderer must resolve. If DejaVu Sans is
   absent, libass substitutes silently and the layout shifts.
+
+
+## p6 — assemble.py — 2026-09-21
+
+Tests: 21 fast, 0 slow, all passing (218 fast / 8 slow across the project)
+Files: `narrator/assemble.py`, `tests/test_assemble.py`, `narrator/config.py`,
+`tests/ffprobe.py`, `CLAUDE.md`
+
+Decisions:
+- One ffmpeg invocation: per-beat visuals concatenated, narration
+  concatenated, music mixed under, captions applied, encoded. The command is a
+  list, logged at DEBUG before it runs, and ffmpeg's stderr is carried into
+  the exception rather than summarised.
+- `amix=...:normalize=0` is load-bearing. The default normalises, which halves
+  the narration when a music bed is added; a test compares the mixed narration
+  against the unmixed one to keep that from regressing silently.
+- `duration=first` stops a long music track outlasting the story, and
+  `-stream_loop -1` covers a short one. Both directions are tested.
+- Every clip is normalised (scale/crop/setsar/fps) before concat, which
+  demands identical geometry. One odd asset would otherwise fail everything.
+- The music level is measured, not assumed: narration is rendered silent and
+  the bed's attenuation is measured against the source with volumedetect.
+
+Deviations from this plan:
+- **Captions are muxed, not burned.** This ffmpeg has no libass, so there is
+  no `ass` filter. `assemble.py` detects that at runtime and falls back to a
+  soft `mov_text` subtitle track, logging a WARNING naming libass;
+  `AssembleConfig.require_burned_captions=True` makes it a hard failure
+  instead. The burn path is written but has never executed here, and the test
+  covering it asserts whichever branch this machine can actually reach.
+
+Known limitations:
+- **The burn path is untested in practice.** On a machine with libass the
+  `ass` filter argument, its path escaping and the resulting overlay are all
+  unverified.
+- Soft subtitles lose the karaoke styling entirely: `mov_text` carries text
+  and timing, not `\k` highlighting, colours or position. A viewer must also
+  turn subtitles on. What p5 built is only fully realised once libass exists.
+- Transitions are hard cuts. The plan mentioned crossfades in passing; none
+  are implemented.

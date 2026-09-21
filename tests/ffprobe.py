@@ -68,3 +68,36 @@ def mean_volume(path: Path) -> float:
         if "mean_volume:" in line:
             return float(line.split("mean_volume:")[1].strip().split()[0])
     raise AssertionError(f"volumedetect reported no mean_volume for {path}: {out.stderr[-400:]}")
+
+
+def subtitle_streams(path: Path) -> list[dict]:
+    return [s for s in probe(path)["streams"] if s["codec_type"] == "subtitle"]
+
+
+def leading_silence(path: Path, threshold_db: int = -50) -> float:
+    """Seconds of silence before the first sound. 0.0 if it starts at once."""
+    out = subprocess.run(
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-hide_banner",
+            "-i",
+            str(path),
+            "-af",
+            f"silencedetect=n={threshold_db}dB:d=0.01",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    starts_silent = False
+    for line in out.stderr.splitlines():
+        if "silence_start:" in line:
+            value = float(line.split("silence_start:")[1].strip().split()[0])
+            if value <= 0.001:
+                starts_silent = True
+        if starts_silent and "silence_end:" in line:
+            return float(line.split("silence_end:")[1].strip().split()[0])
+    return 0.0
