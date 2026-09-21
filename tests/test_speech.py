@@ -259,6 +259,28 @@ def test_cache_key_changes_when_an_input_changes(tmp_path, change):
     assert baseline.audio_path != changed.audio_path
 
 
+def test_changing_speed_is_a_cache_miss(tmp_path):
+    spy = synth_spy()
+
+    with patch.object(speech, "_synthesize_audio", spy):
+        slow = synthesize([beat()], VOICE, tmp_path, cfg=replace(CFG, speed=1.0))[0]
+        fast = synthesize([beat()], VOICE, tmp_path, cfg=replace(CFG, speed=1.4))[0]
+
+    assert slow.audio_path != fast.audio_path
+    assert spy.call_count == 2, "speed change reused cached audio at the old speed"
+
+
+def test_changing_lang_code_is_a_cache_miss(tmp_path):
+    spy = synth_spy()
+
+    with patch.object(speech, "_synthesize_audio", spy):
+        american = synthesize([beat()], VOICE, tmp_path, cfg=replace(CFG, lang_code="a"))[0]
+        british = synthesize([beat()], VOICE, tmp_path, cfg=replace(CFG, lang_code="b"))[0]
+
+    assert american.audio_path != british.audio_path
+    assert spy.call_count == 2, "lang_code change reused audio in the other accent"
+
+
 def test_cache_key_ignores_device(tmp_path):
     # Same model and text on a different device is the same narration; the
     # cache should not be invalidated by where it was computed.

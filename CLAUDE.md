@@ -151,10 +151,27 @@ target aspect (stock is mostly landscape, so vertical needs a centre crop or a
 blurred-pad), `zoompan` needs the target resolution passed in, and `captions.py`
 takes wrap width and vertical position from the preset.
 
-## ffmpeg gotchas
+## Gotchas
 
-Filter-graph syntax is the biggest time sink in this project. Every quirk solved
-gets written down here immediately, with the failing command and the fix, so it
-is not rediscovered three modules later.
+Every quirk solved gets written down here immediately, with the failing command
+and the fix, so it is not rediscovered three modules later.
+
+### ffmpeg
+
+Filter-graph syntax is expected to be the biggest time sink in this project.
 
 _(empty — fill as we hit them)_
+
+### torch and environment
+
+- **An MPS tensor cannot go straight to numpy.** `np.asarray(tensor)` raises
+  for a tensor on `mps`; it needs `.detach().cpu().numpy()` first. `_to_numpy`
+  in `speech.py` does this by duck-typing on `detach`, so the module still does
+  not import torch.
+- **`pytest -q` stacks.** `addopts` already contains `-q`, so passing `-q` on
+  the command line makes it `-qq`, which silently suppresses the
+  "N passed" summary line. Run `uv run pytest -m slow -p no:warnings` with no
+  extra `-q` when you want the count.
+- **`KPipeline(lang_code="a", model=False)`** reports `.repo_id` without
+  downloading any weights — useful for checking metadata in a test without
+  paying for a model load.

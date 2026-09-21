@@ -138,3 +138,31 @@ def test_benchmark_cpu_vs_mps(tmp_path, capsys):
 
     for device, r in results.items():
         assert r["realtime_factor"] > 1.0, f"{device} is slower than real time: {r}"
+
+
+@pytest.mark.slow
+def test_hardcoded_voice_list_is_a_subset_of_what_kokoro_ships():
+    """The voice list in speech.py is hardcoded so an unknown id fails loudly.
+
+    That only helps while it matches the model actually installed, so this
+    checks it against the voices the package's own repo publishes.
+    """
+    from pathlib import Path
+
+    from huggingface_hub import list_repo_files
+    from kokoro import KPipeline
+
+    # model=False reports the repo the installed package defaults to without
+    # downloading any weights.
+    repo_id = KPipeline(lang_code="a", model=False).repo_id
+    shipped = {
+        Path(name).stem
+        for name in list_repo_files(repo_id)
+        if name.startswith("voices/") and name.endswith(".pt")
+    }
+
+    # Guard against the listing coming back empty and making this vacuous.
+    assert len(shipped) > 20, f"{repo_id} listed only {len(shipped)} voices"
+
+    missing = speech.VOICES - shipped
+    assert not missing, f"speech.VOICES names voices {repo_id} does not ship: {sorted(missing)}"
