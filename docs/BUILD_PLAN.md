@@ -199,3 +199,50 @@ wrong in the actual video even with green tests — sync drift, caption timing,
 repeated visuals, abrupt audio. Then list every place a failure could be
 swallowed silently. List only; don't fix. That list is the input to the next
 round of work.
+
+---
+
+# Round 2
+
+Written after the p8 verification. The pipeline produces video end to end, but
+the captions are misplaced, the console script does not work, and nine places
+can swallow a failure. These steps close that gap. Normal rules apply.
+
+## Step 9 — caption timing (tag: `p9`)
+
+a. Offset each beat's words by the cumulative duration of the beats before it
+   when building captions. Keep `Beat.words` beat-relative; the shift happens
+   at caption-build time.
+b. Trim leading and trailing silence in `speech.py` (amplitude threshold,
+   configurable, with a short retained pad). Add the trim settings to the
+   cache key, with a test that changing them causes a cache miss.
+c. Caption groups never cross a sentence boundary.
+d. New test that would have caught the offset bug: two beats with real
+   (recorded-fixture) alignment, concatenated. Assert caption times are
+   monotonic across the whole file, the last caption ends within 0.3s of the
+   total duration, and each beat's first caption starts within 0.1s of that
+   beat's speech onset.
+
+## Step 10 — packaging (tag: `p10`)
+
+Fix the console script. Add a test that runs the installed `narrator`
+executable as a subprocess (`--help` and a `--dry-run`), not via `CliRunner`.
+
+## Step 11 — silent failures (tag: `p11`)
+
+Work through the nine silent-failure items in `docs/BUILD_LOG.md` in the
+logged order. Each gets a test proving it now raises or warns.
+
+## Step 12 — re-verify (tag: `p12`)
+
+Re-run Step 8's verification (`tiny_story.txt` and the ~300-word story) with
+`require_pexels=True` and `require_burned_captions=True`. Report the same
+measurements as Step 8, plus caption offset from speech onset on three
+sampled beats, plus anything that still looks wrong in the video.
+
+Prerequisites, to be satisfied before this step runs:
+
+- an ffmpeg built with libass, so `ffmpeg -filters | grep -w ass` prints a
+  line;
+- `PEXELS_API_KEY` set in the environment. Its value is never printed, logged
+  or committed.
