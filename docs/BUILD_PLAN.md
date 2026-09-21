@@ -12,7 +12,9 @@ step only. Then stop.
 2. Full fast suite green (`pytest`), slow suite green (`pytest -m slow`).
 3. `ruff check` and `ruff format --check` clean.
 4. Only the files listed for the step were created or changed, plus
-   CLAUDE.md, pyproject.toml, uv.lock, and tests/fixtures/.
+   CLAUDE.md, narrator/config.py, pyproject.toml, uv.lock, and
+   tests/fixtures/. Adding a per-stage config dataclass to narrator/config.py
+   is not a deviation.
 5. Self-review passed (below).
 
 Then: commit with a message whose body explains *why* for any non-obvious
@@ -93,6 +95,25 @@ Tests:
 - first start ≥ 0; last end ≤ audio duration + 0.05s
 - numerals and punctuation ("3 a.m.", "$40", "don't") don't desync the count
 - mismatch raises AlignmentError
+
+## Step 3b — tolerant alignment (tag: `p3b`)
+
+Files: `narrator/align.py`, `narrator/speech.py`, their tests.
+
+a. Replace the strict word-count rule in align.py with sequence alignment:
+   match normalized whisper tokens to normalized reference words
+   (difflib.SequenceMatcher or equivalent), give each reference word its
+   match's timing, interpolate timings for unmatched reference words between
+   matched neighbours, and raise AlignmentError only when the match ratio
+   falls below a configurable threshold (default 0.85). Beat.words must carry
+   the reference text, not whisper's. The align() signature does not change.
+b. Test: the "3am" vs "3 a.m." case aligns instead of raising; garbage audio
+   (a mismatched transcript fixture) still raises; interpolated timings stay
+   monotonic and inside the audio duration.
+c. Investigate Kokoro determinism: seed torch and pin the thread count before
+   each synthesis, then hash the output under both test orderings as you did
+   before. If that makes it reproducible, keep it and add a slow test. If not,
+   record the result and move on.
 
 ## Step 4 — visuals (tag: `p4`)
 
