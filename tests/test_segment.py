@@ -36,6 +36,9 @@ STORY = (
 )
 
 
+UNTERMINATED_STORY = "The house stood empty. Rain came in through the roof. Then nothing at all"
+
+
 # --- degenerate input -------------------------------------------------------
 
 
@@ -119,9 +122,38 @@ def test_single_unsplittable_sentence_exceeds_max_chars_without_raising():
 # --- boundaries -------------------------------------------------------------
 
 
-def test_every_beat_ends_on_terminal_punctuation():
-    for beat in segment(STORY, max_chars=80):
-        assert ends_on_terminal(beat.text), f"does not end on terminal punctuation: {beat.text!r}"
+def test_every_beat_except_possibly_the_last_ends_on_terminal_punctuation():
+    # Only the last beat is allowed to be an unterminated fragment: a story
+    # may simply stop without a full stop, and dropping that text would be
+    # worse than emitting it. Every earlier beat ended because a sentence did.
+    for text in (STORY, UNTERMINATED_STORY):
+        for max_chars in (40, 80, 220):
+            beats = segment(text, max_chars=max_chars)
+            for beat in beats[:-1]:
+                assert ends_on_terminal(beat.text), (
+                    f"does not end on terminal punctuation: {beat.text!r}"
+                )
+
+
+def test_last_beat_ends_on_terminal_punctuation_when_the_text_does():
+    beats = segment(STORY, max_chars=80)
+    assert ends_on_terminal(beats[-1].text)
+
+
+def test_ellipsis_followed_by_a_lowercase_word_does_not_split():
+    # The ellipsis is a pause inside the sentence, not the end of one.
+    assert [b.text for b in segment("I thought\u2026 maybe.", max_chars=1)] == [
+        "I thought\u2026 maybe."
+    ]
+
+
+def test_title_and_versus_abbreviations_do_not_split():
+    text = "She waited at St. Mary. Mt. Hood was visible. It was cat vs. dog."
+    assert [b.text for b in segment(text, max_chars=1)] == [
+        "She waited at St. Mary.",
+        "Mt. Hood was visible.",
+        "It was cat vs. dog.",
+    ]
 
 
 def test_one_sentence_per_beat_when_max_chars_forces_it():
