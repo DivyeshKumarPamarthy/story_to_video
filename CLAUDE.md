@@ -158,9 +158,23 @@ and the fix, so it is not rediscovered three modules later.
 
 ### ffmpeg
 
-Filter-graph syntax is expected to be the biggest time sink in this project.
-
-_(empty — fill as we hit them)_
+- **`-loop 1` on a file ffmpeg cannot decode hangs forever.** It does not
+  error; it sits there. Found by a test that deliberately fed it a text file
+  named `.png`, which wedged the suite until it was killed. Every ffmpeg call
+  in this project therefore passes `-nostdin` and runs under a subprocess
+  timeout (`VisualsConfig.ffmpeg_timeout`), and a timeout is reported as a
+  failure with the command in the message.
+- **Upscale before `zoompan` or the push-in judders.** zoompan samples from
+  its input, so feeding it 2x the output size gives sub-pixel steps instead of
+  whole-pixel jumps. The cost is a scale filter; the benefit is the difference
+  between "slow push-in" and "stuttering".
+- **`zoompan` counts in frames, not seconds.** `d` is the number of output
+  frames per input frame, so it is `seconds * fps`, and the zoom step has to
+  be divided by that same frame count to land on the target zoom at the end.
+- **This Homebrew ffmpeg has no libass.** `ffmpeg -filters | grep -w ass`
+  returns nothing: the build lacks `--enable-libass` and
+  `--enable-libfreetype`, so there is no `ass`, `subtitles` or `drawtext`
+  filter. Burning subtitles needs a different ffmpeg build.
 
 ### torch and environment
 

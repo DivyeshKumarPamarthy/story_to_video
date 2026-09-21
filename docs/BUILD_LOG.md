@@ -183,3 +183,54 @@ Known limitations:
   long unmatched run they will drift against the audio.
 - `_match` silently drops transcribed tokens that normalise to nothing
   (punctuation-only). They carry no text, so nothing is lost from captions.
+
+
+## p4 — visuals/ — 2026-09-21
+
+Tests: 59 fast, 0 slow, all passing (175 fast / 8 slow across the project)
+Files: `narrator/visuals/__init__.py`, `query.py`, `pexels.py`, `stills.py`,
+`tests/test_visuals_{query,stills,pexels,fetch}.py`, `narrator/config.py`,
+`tests/ffprobe.py`, `CLAUDE.md`
+
+Decisions:
+- One interface, `fetch(beat, cfg, out_dir)`, and whatever the source the
+  result is conformed to the configured resolution, fps and the beat's own
+  duration. The assembler never has to know where a clip came from.
+- `-stream_loop -1` plus `-t` covers both halves of "asset duration >= beat
+  duration": a short clip loops, a long one is trimmed, in one command.
+- Stock audio is stripped with `-an`. Narration is the only sound, and a
+  stock clip's own track would otherwise appear under it.
+- Generated backgrounds are procedural gradients via lavfi, so the fallback
+  needs neither network nor bundled art. The variant is a hash of the beat's
+  query, so a rerun looks identical, but it steps past whatever the previous
+  beat used.
+- `MissingApiKey` subclasses `PexelsError` so a caller can fall back on
+  ordinary API failures while still treating an absent key as different.
+- Every ffmpeg call passes `-nostdin` and runs under a timeout. See the
+  limitation below: this was not defensive programming, it was a real hang.
+
+Deviations from this plan:
+- **The missing `PEXELS_API_KEY` did not stop the step.** The plan says to
+  stop and ask; the standing instruction for this run was to continue through
+  every step. The compromise: `VisualsConfig.require_pexels` defaults to False,
+  so the pipeline still produces video offline, and every fallback logs a
+  WARNING naming `PEXELS_API_KEY`. A test asserts that warning is emitted, so
+  the skip cannot become silent. Setting `require_pexels=True` restores the
+  plan's behaviour — a missing key is then fatal.
+- **No Pexels code has ever run against the real API.** Every HTTP test is
+  mocked, as the plan requires, so the request shape, the auth header and the
+  payload parsing are all unverified against the live service.
+- `tests/ffprobe.py` gained video helpers (resolution, fps, mean volume).
+
+Known limitations:
+- **"Paragraph-initial beats are a hint to change scene" is not implemented.**
+  `segment.py` treats a paragraph break as a hard beat boundary but does not
+  record which beats began one, and `Beat` has no field for it. Adding one
+  would change the contract, which is a stop-and-ask condition. The
+  consecutive-asset rule approximates it: a beat never reuses the previous
+  beat's asset, and a repeated query gets a varying modifier appended.
+- Keyword extraction is first-three-content-words. It has no idea which word
+  is the *subject*; "the house had been empty" becomes "house been empty"
+  minus stopwords, which is a serviceable stock query but not a good one.
+- `require_pexels=True` is untested against a real key, per the deviation
+  above.

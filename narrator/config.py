@@ -8,6 +8,7 @@ with :func:`dataclasses.replace` without anyone worrying about aliasing.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 #: Torch devices this project knows how to ask for. "cpu" is the default
 #: everywhere: it is the only one available on every machine, and for an 82M
@@ -80,3 +81,52 @@ class AlignConfig:
             raise ValueError(f"beam_size must be positive, got {self.beam_size}")
         if not 0 < self.min_match_ratio <= 1:
             raise ValueError(f"min_match_ratio must be in (0, 1], got {self.min_match_ratio}")
+
+
+#: Aspect presets. CLAUDE.md is the contract: nothing hardcodes a resolution.
+VIDEO_PRESETS = {
+    "landscape": (1920, 1080),
+    "vertical": (1080, 1920),
+}
+
+
+@dataclass(frozen=True)
+class VisualsConfig:
+    """How each beat's background is sourced and rendered."""
+
+    width: int = 1920
+    height: int = 1080
+    fps: int = 30
+    #: Total push-in across a still's clip. 1.0 would be a static frame.
+    zoom: float = 1.12
+    #: Used when a beat has no duration yet (no narration synthesised).
+    default_seconds: float = 4.0
+    #: Directory of images to use instead of generated backgrounds.
+    stills_dir: Path | None = None
+    api_key_env: str = "PEXELS_API_KEY"
+    request_timeout: float = 10.0
+    #: ffmpeg is killed after this many seconds. Not paranoia: `-loop 1`
+    #: on an undecodable image never returns (see CLAUDE.md gotchas).
+    ffmpeg_timeout: float = 120.0
+    #: True makes a missing key or a failed API call fatal instead of falling
+    #: back to stills. The pipeline stays usable offline by default, but a run
+    #: that is meant to use stock footage can insist on it.
+    require_pexels: bool = False
+
+    def __post_init__(self) -> None:
+        for name in ("width", "height", "fps"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be positive, got {getattr(self, name)}")
+        if self.zoom < 1.0:
+            raise ValueError(f"zoom must be at least 1.0, got {self.zoom}")
+        if self.default_seconds <= 0:
+            raise ValueError(f"default_seconds must be positive, got {self.default_seconds}")
+        if self.ffmpeg_timeout <= 0:
+            raise ValueError(f"ffmpeg_timeout must be positive, got {self.ffmpeg_timeout}")
+
+    @classmethod
+    def preset(cls, name: str, **overrides: object) -> VisualsConfig:
+        if name not in VIDEO_PRESETS:
+            raise ValueError(f"unknown preset {name!r}; expected one of {', '.join(VIDEO_PRESETS)}")
+        width, height = VIDEO_PRESETS[name]
+        return cls(width=width, height=height, **overrides)  # type: ignore[arg-type]
