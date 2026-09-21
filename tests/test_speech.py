@@ -440,3 +440,124 @@ def test_multiple_chunks_are_concatenated(tmp_path):
 
     single = len(SENTENCE) / 15.0
     assert out[0].duration == pytest.approx(2 * single, abs=0.05)
+
+
+# --- silence trimming (p8 finding 2) ----------------------------------------
+
+
+def padded_audio(
+    lead: float, speech_seconds: float, tail: float, cfg: SpeechConfig = CFG
+) -> np.ndarray:
+    """Silence, then a tone, then silence -- what Kokoro actually emits."""
+    quiet_lead = np.zeros(int(lead * cfg.sample_rate), dtype=np.float32)
+    quiet_tail = np.zeros(int(tail * cfg.sample_rate), dtype=np.float32)
+    samples = int(speech_seconds * cfg.sample_rate)
+    t = np.linspace(0.0, speech_seconds, samples, endpoint=False, dtype=np.float32)
+    tone = (0.4 * np.sin(2 * np.pi * 220.0 * t)).astype(np.float32)
+    return np.concatenate([quiet_lead, tone, quiet_tail])
+
+
+def test_leading_silence_is_trimmed(tmp_path):
+    # Kokoro pads about 0.3s before speaking, which made every caption early.
+    stub = Mock(return_value=padded_audio(0.30, 1.0, 0.30))
+
+    with patch.object(speech, "_synthesize_audio", stub):
+        out = synthesize([beat()], VOICE, tmp_path)[0]
+
+    expected = 1.0 + 2 * CFG.trim_pad
+    assert out.duration == pytest.approx(expected, abs=0.03)
+
+
+def test_the_retained_pad_is_kept(tmp_path):
+    stub = Mock(return_value=padded_audio(0.5, 1.0, 0.5))
+    cfg = replace(CFG, trim_pad=0.2)
+
+    with patch.object(speech, "_synthesize_audio", stub):
+        out = synthesize([beat()], VOICE, tmp_path, cfg=cfg)[0]
+
+    assert out.duration == pytest.approx(1.0 + 0.4, abs=0.03)
+
+
+def test_speech_onset_is_within_the_pad_of_zero(tmp_path):
+    stub = Mock(return_value=padded_audio(0.40, 1.0, 0.1))
+
+    with patch.object(speech, "_synthesize_audio", stub):
+        out = synthesize([beat()], VOICE, tmp_path)[0]
+
+    assert ffprobe.leading_silence(out.audio_path) <= CFG.trim_pad + 0.02
+
+
+def test_trimming_can_be_turned_off(tmp_path):
+    stub = Mock(return_value=padded_audio(0.3, 1.0, 0.3))
+    cfg = replace(CFG, trim_silence=False)
+
+    with patch.object(speech, "_synthesize_audio", stub):
+        out = synthesize([beat()], VOICE, tmp_path, cfg=cfg)[0]
+
+    assert out.duration == pytest.approx(1.6, abs=0.03)
+
+
+def test_audio_that_is_entirely_silent_raises(tmp_path):
+    stub = Mock(return_value=np.zeros(int(1.5 * CFG.sample_rate), dtype=np.float32))
+
+    with patch.object(speech, "_synthesize_audio", stub):
+        with pytest.raises(SynthesisError, match="silence"):
+            synthesize([beat()], VOICE, tmp_path)
+
+
+def test_quiet_speech_below_the_threshold_is_not_mistaken_for_silence(tmp_path):
+    quiet = padded_audio(0.3, 1.0, 0.3) * 0.05
+    cfg = replace(CFG, trim_threshold=0.005)
+
+    with patch.object(speech, "_synthesize_audio", Mock(return_value=quiet)):
+        out = synthesize([beat()], VOICE, tmp_path, cfg=cfg)[0]
+
+    assert out.duration == pytest.approx(1.0 + 2 * cfg.trim_pad, abs=0.03)
+
+
+def test_changing_the_trim_threshold_is_a_cache_miss(tmp_path):
+    spy = Mock(side_effect=lambda text, voice, cfg: padded_audio(0.3, 1.0, 0.3, cfg))
+
+    with patch.object(speech, "_synthesize_audio", spy):
+        first = synthesize([beat()], VOICE, tmp_path, cfg=replace(CFG, trim_threshold=0.01))[0]
+        second = synthesize([beat()], VOICE, tmp_path, cfg=replace(CFG, trim_threshold=0.2))[0]
+
+    assert first.audio_path != second.audio_path
+    assert spy.call_count == 2, "threshold change reused audio trimmed differently"
+
+
+def test_changing_the_trim_pad_is_a_cache_miss(tmp_path):
+    spy = Mock(side_effect=lambda text, voice, cfg: padded_audio(0.3, 1.0, 0.3, cfg))
+
+    with patch.object(speech, "_synthesize_audio", spy):
+        first = synthesize([beat()], VOICE, tmp_path, cfg=replace(CFG, trim_pad=0.05))[0]
+        second = synthesize([beat()], VOICE, tmp_path, cfg=replace(CFG, trim_pad=0.30))[0]
+
+    assert first.audio_path != second.audio_path
+    assert spy.call_count == 2
+
+
+def test_turning_trimming_off_is_a_cache_miss(tmp_path):
+    spy = Mock(side_effect=lambda text, voice, cfg: padded_audio(0.3, 1.0, 0.3, cfg))
+
+    with patch.object(speech, "_synthesize_audio", spy):
+        trimmed = synthesize([beat()], VOICE, tmp_path, cfg=CFG)[0]
+        whole = synthesize([beat()], VOICE, tmp_path, cfg=replace(CFG, trim_silence=False))[0]
+
+    assert trimmed.audio_path != whole.audio_path
+    assert spy.call_count == 2
+
+
+def test_trim_defaults_are_conservative():
+    cfg = SpeechConfig()
+    assert cfg.trim_silence is True
+    assert 0 < cfg.trim_threshold < 0.1
+    assert 0 < cfg.trim_pad <= 0.2
+
+
+@pytest.mark.parametrize(
+    "bad", [{"trim_threshold": 0}, {"trim_threshold": 1.5}, {"trim_pad": -0.1}]
+)
+def test_invalid_trim_settings_raise(bad):
+    with pytest.raises(ValueError):
+        SpeechConfig(**bad)

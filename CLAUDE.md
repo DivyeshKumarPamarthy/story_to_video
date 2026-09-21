@@ -215,6 +215,15 @@ and the fix, so it is not rediscovered three modules later.
   in a slow test, and note that the synthesis cache stores whichever rendering
   was generated first. Deterministic assertions belong in the fast suite,
   against recorded fixtures.
+- **Kokoro pads ~0.3s of silence before it speaks**, and a little after.
+  Whisper then reports the first word at 0.000 regardless, so untrimmed audio
+  puts every caption in the beat early and adds a pause at every beat
+  boundary. `speech.py` trims to an amplitude threshold with a short retained
+  pad, and the trim settings are part of the cache key.
+- **`Beat.words` are timed against that beat's own audio, not the video.**
+  Anything writing into whole-video time has to add the durations of the
+  beats before it. This is the bug p8 found: with one beat the offset is
+  zero, so it hides in every single-beat fixture.
 - **faster-whisper cannot use MPS.** It runs through CTranslate2, which has no
   Metal backend, so Apple Silicon means `device="cpu"` with
   `compute_type="int8"`. This is not a performance choice.

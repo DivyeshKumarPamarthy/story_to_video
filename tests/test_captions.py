@@ -7,6 +7,8 @@ such a test while a timing bug that breaks everything would pass it.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from narrator import captions
@@ -32,10 +34,17 @@ def beat(index: int, *specs: tuple[str, float, float]) -> Beat:
     )
 
 
+# Every beat's words start at 0.0: they are timed against that beat's own
+# audio. The old version of this fixture wrote beat 1 in whole-video time,
+# which is precisely why the missing offset survived p5, p7 and p8.
 SIMPLE = [
     beat(0, ("The", 0.0, 0.3), ("house", 0.3, 0.7), ("stood", 0.7, 1.0), ("empty.", 1.0, 1.4)),
-    beat(1, ("Rain", 1.5, 1.8), ("came", 1.8, 2.1), ("in.", 2.1, 2.4)),
+    beat(1, ("Rain", 0.0, 0.3), ("came", 0.3, 0.6), ("in.", 0.6, 0.9)),
 ]
+
+#: Beat 0 runs 0.0-1.4; beat 1 therefore belongs at 1.4-2.3 in the finished
+#: video, not at 0.0-0.9 where its own timings put it.
+BEAT_1_OFFSET = 1.4
 
 
 # --- structure --------------------------------------------------------------
@@ -209,9 +218,9 @@ def test_no_rendered_line_exceeds_the_wrap_width(tmp_path):
 def test_grouping_never_splits_across_beats(tmp_path):
     parsed = parse_ass(build_ass(SIMPLE, CFG, tmp_path / "c.ass"))
 
-    # Beat 0 ends at 1.4 and beat 1 starts at 1.5; no event may span both.
+    # Beat 1 begins exactly where beat 0 ends; no event may span the join.
     for event in parsed.events:
-        assert not (event.start < 1.4 < event.end)
+        assert not (event.start < BEAT_1_OFFSET < event.end)
 
 
 # --- config -----------------------------------------------------------------
@@ -234,3 +243,158 @@ def test_vertical_preset_uses_a_bigger_font(tmp_path):
     vertical = CaptionConfig.preset("vertical")
     assert vertical.font_size > landscape.font_size
     assert (vertical.width, vertical.height) == (1080, 1920)
+
+
+# --- the offset (p8 finding 1) ----------------------------------------------
+
+
+def test_later_beats_are_offset_into_whole_video_time(tmp_path):
+    parsed = parse_ass(build_ass(SIMPLE, CFG, tmp_path / "c.ass"))
+
+    # Beat 1's own words start at 0.0; in the finished video they belong at
+    # 1.4, after beat 0's audio has played.
+    first_of_beat_1 = next(e for e in parsed.events if "Rain" in e.text)
+    assert first_of_beat_1.start == pytest.approx(BEAT_1_OFFSET, abs=0.005)
+
+
+def test_captions_never_run_backwards_across_the_whole_file(tmp_path):
+    parsed = parse_ass(build_ass(SIMPLE, CFG, tmp_path / "c.ass"))
+
+    starts = [e.start for e in parsed.events]
+    assert starts == sorted(starts), "captions jump backwards at a beat boundary"
+
+
+def test_the_last_caption_lands_near_the_end_of_the_video(tmp_path):
+    parsed = parse_ass(build_ass(SIMPLE, CFG, tmp_path / "c.ass"))
+    total = sum(b.duration for b in SIMPLE)
+
+    assert parsed.events[-1].end == pytest.approx(total, abs=0.3)
+
+
+def test_a_beat_without_a_duration_cannot_be_placed(tmp_path):
+    # Without a duration there is no way to know where the next beat starts,
+    # and guessing would silently shift everything after it.
+    undated = Beat(
+        index=0,
+        text="The house stood empty.",
+        visual_query="",
+        words=words(("The", 0.0, 0.3), ("house", 0.3, 0.7)),
+    )
+
+    with pytest.raises(CaptionError, match="duration"):
+        build_ass([undated], CFG, tmp_path / "c.ass")
+
+
+def test_a_single_beat_is_unaffected_by_offsetting(tmp_path):
+    # The case that hid the bug: with one beat the offset is zero.
+    parsed = parse_ass(build_ass(SIMPLE[:1], CFG, tmp_path / "c.ass"))
+    assert parsed.events[0].start == pytest.approx(0.0, abs=0.005)
+
+
+# --- sentence boundaries ----------------------------------------------------
+
+
+def test_a_caption_never_holds_two_sentences(tmp_path):
+    two_sentences = [
+        beat(
+            0,
+            ("floor", 0.0, 0.3),
+            ("above.", 0.3, 0.6),
+            ("Mara", 0.6, 0.9),
+            ("counted", 0.9, 1.2),
+        )
+    ]
+    parsed = parse_ass(build_ass(two_sentences, CFG, tmp_path / "c.ass"))
+
+    for event in parsed.events:
+        rendered = captions.visible_text(event.text)
+        assert "above." not in rendered or "Mara" not in rendered, (
+            f"caption spans a sentence boundary: {rendered!r}"
+        )
+
+
+def test_a_sentence_end_flushes_the_group_early(tmp_path):
+    ending = [beat(0, ("Go.", 0.0, 0.3), ("She", 0.3, 0.6), ("left.", 0.6, 0.9))]
+    parsed = parse_ass(build_ass(ending, CFG, tmp_path / "c.ass"))
+
+    # "Go." ends a sentence, so it stands alone rather than pairing with "She".
+    assert captions.visible_text(parsed.events[0].text).strip() == "Go."
+
+
+@pytest.mark.parametrize("terminator", [".", "!", "?", '."', "?”", "…"])
+def test_every_terminator_ends_a_group(tmp_path, terminator):
+    spoken = [beat(0, (f"stop{terminator}", 0.0, 0.3), ("Next", 0.3, 0.6))]
+    parsed = parse_ass(build_ass(spoken, CFG, tmp_path / "c.ass"))
+
+    assert len(parsed.events) == 2
+
+
+def test_an_abbreviation_does_not_end_a_group(tmp_path):
+    # "Dr." is not the end of a sentence, so it should still pair up.
+    spoken = [beat(0, ("Dr.", 0.0, 0.3), ("Reyes", 0.3, 0.6))]
+    parsed = parse_ass(build_ass(spoken, CFG, tmp_path / "c.ass"))
+
+    assert len(parsed.events) == 1
+
+
+# --- the test that would have caught p8 finding 1 ---------------------------
+
+
+def recorded_beats() -> list[Beat]:
+    """Two beats carrying real whisper output, concatenated.
+
+    Durations are what `speech.py` now produces after trimming: the last word
+    plus the retained pad. The fixture's raw audio_duration includes Kokoro's
+    untrimmed tail, which is no longer what reaches the assembler.
+    """
+    import json
+
+    fixture = json.loads((Path(__file__).parent / "fixtures" / "whisper_words.json").read_text())
+    beats = []
+    for index, key in enumerate(("plain", "tricky")):
+        case = fixture[key]
+        spoken = [
+            Word(text=w["text"].strip(), start=w["start"], end=w["end"]) for w in case["words"]
+        ]
+        beats.append(
+            Beat(
+                index=index,
+                text=case["text"],
+                visual_query="",
+                duration=spoken[-1].end + 0.05,
+                words=spoken,
+            )
+        )
+    return beats
+
+
+def test_real_alignment_concatenated_stays_in_order(tmp_path):
+    beats = recorded_beats()
+    parsed = parse_ass(build_ass(beats, CFG, tmp_path / "c.ass"))
+
+    for earlier, later in zip(parsed.events, parsed.events[1:], strict=False):
+        assert earlier.end <= later.start + 0.001, (
+            f"{earlier.raw_end} then {later.raw_start} runs backwards"
+        )
+
+
+def test_real_alignment_concatenated_ends_near_the_total_duration(tmp_path):
+    beats = recorded_beats()
+    total = sum(b.duration for b in beats)
+    parsed = parse_ass(build_ass(beats, CFG, tmp_path / "c.ass"))
+
+    assert parsed.events[-1].end == pytest.approx(total, abs=0.3)
+
+
+def test_each_beat_starts_within_100ms_of_its_own_speech(tmp_path):
+    beats = recorded_beats()
+    parsed = parse_ass(build_ass(beats, CFG, tmp_path / "c.ass"))
+
+    offset = 0.0
+    for beat_ in beats:
+        onset = offset + beat_.words[0].start
+        first = next(e for e in parsed.events if e.start >= offset - 0.001)
+        assert first.start == pytest.approx(onset, abs=0.1), (
+            f"beat {beat_.index} captions start {first.start - onset:+.3f}s from its speech"
+        )
+        offset += beat_.duration

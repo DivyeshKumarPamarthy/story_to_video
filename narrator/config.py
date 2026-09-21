@@ -30,6 +30,14 @@ class SpeechConfig:
     lang_code: str = "a"  # "a" American English, "b" British English
     speed: float = 1.0
     model_version: str = "kokoro-82m-v1.0"
+    #: Kokoro pads roughly 0.3s of silence before it speaks and a little
+    #: after. Left in, every caption in the beat is early by that much and the
+    #: story gains a pause at every beat boundary.
+    trim_silence: bool = True
+    #: Amplitude below which a sample counts as silence, on a -1..1 scale.
+    trim_threshold: float = 0.01
+    #: Seconds of silence kept either side, so speech does not start abruptly.
+    trim_pad: float = 0.05
 
     def __post_init__(self) -> None:
         if self.device not in DEVICES:
@@ -40,6 +48,10 @@ class SpeechConfig:
             raise ValueError(f"sample_rate must be positive, got {self.sample_rate}")
         if self.speed <= 0:
             raise ValueError(f"speed must be positive, got {self.speed}")
+        if not 0 < self.trim_threshold < 1:
+            raise ValueError(f"trim_threshold must be in (0, 1), got {self.trim_threshold}")
+        if self.trim_pad < 0:
+            raise ValueError(f"trim_pad must not be negative, got {self.trim_pad}")
 
 
 #: faster-whisper runs through CTranslate2, which has no Metal backend, so

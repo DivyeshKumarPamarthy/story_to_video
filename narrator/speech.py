@@ -113,7 +113,7 @@ def _render(path: Path, text: str, voice: str, cfg: SpeechConfig) -> float:
     """
     partial = path.with_name(path.name + ".part")
     try:
-        audio = _synthesize_audio(text, voice, cfg)
+        audio = _trim_silence(_synthesize_audio(text, voice, cfg), cfg)
         _write_wav(partial, audio, cfg.sample_rate)
         duration = probe_duration(partial)
         _check_plausible(text, duration)
@@ -139,6 +139,10 @@ def _cache_path(cache_dir: Path, text: str, voice: str, cfg: SpeechConfig) -> Pa
             cfg.lang_code,
             f"{cfg.speed:.4f}",
             str(cfg.sample_rate),
+            # Trimming changes the audio, so it changes the cache entry.
+            str(cfg.trim_silence),
+            f"{cfg.trim_threshold:.5f}",
+            f"{cfg.trim_pad:.4f}",
         ]
     )
     return cache_dir / f"{hashlib.sha256(key.encode('utf-8')).hexdigest()[:16]}.wav"
@@ -153,6 +157,31 @@ def _check_plausible(text: str, duration: float) -> None:
             f"implausible narration rate: {len(text)} characters in {duration:.2f}s "
             f"({rate:.1f} chars/sec) for {_excerpt(text)}"
         )
+
+
+def _trim_silence(audio: Any, cfg: SpeechConfig) -> np.ndarray:
+    """Cut the silence Kokoro pads around the speech, keeping a short pad.
+
+    This is a timing fix, not a cosmetic one: the narration is what every
+    caption is aligned against, so leading silence puts every word on screen
+    early and leaves a gap at each beat boundary.
+    """
+    samples = np.asarray(audio, dtype=np.float32).reshape(-1)
+    if not cfg.trim_silence or samples.size == 0:
+        # Empty output is "no audio", not "silence"; _write_wav names it.
+        return samples
+
+    loud = np.flatnonzero(np.abs(samples) >= cfg.trim_threshold)
+    if loud.size == 0:
+        raise SynthesisError(
+            f"synthesis produced {samples.size / cfg.sample_rate:.2f}s of silence "
+            f"(nothing above {cfg.trim_threshold})"
+        )
+
+    pad = int(round(cfg.trim_pad * cfg.sample_rate))
+    start = max(int(loud[0]) - pad, 0)
+    end = min(int(loud[-1]) + 1 + pad, samples.size)
+    return samples[start:end]
 
 
 def _write_wav(path: Path, audio: Any, sample_rate: int) -> None:

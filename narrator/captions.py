@@ -144,25 +144,71 @@ def _events(beats: list[Beat], cfg: CaptionConfig) -> str:
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
+    # Beat.words are timed against that beat's own audio, so each beat has to
+    # be pushed along by everything that plays before it. Without this every
+    # beat's captions start at zero and pile up on the opening shot.
+    offset = 0.0
     for beat in beats:
         if not beat.words:
             raise CaptionError(
                 f"beat {beat.index} has no word timings; run align before building captions"
             )
+        if beat.duration is None:
+            raise CaptionError(
+                f"beat {beat.index} has no duration, so the beats after it cannot be "
+                f"placed; run speech.synthesize before building captions"
+            )
         # Grouping never crosses a beat: a caption spanning two beats would sit
         # over a visual cut.
         for group in _group(beat.words, cfg.words_per_line):
-            lines.append(_dialogue(group, cfg))
+            lines.append(_dialogue(group, cfg, offset))
+        offset += beat.duration
     return "\n".join(lines) + "\n"
 
 
+#: A word ending a sentence, allowing for a closing quote or bracket.
+_SENTENCE_END = re.compile(r"[.!?\u2026][\"\'\u201d\u2019)\]]*$")
+
+
 def _group(words: list[Word], size: int) -> list[list[Word]]:
-    return [words[i : i + size] for i in range(0, len(words), size)]
+    """Fixed-size groups, flushed early at a sentence end.
+
+    Holding the end of one sentence and the start of the next on screen
+    together reads as a mistake, however well the timings line up.
+    """
+    groups: list[list[Word]] = []
+    current: list[Word] = []
+    for word in words:
+        current.append(word)
+        if len(current) == size or _ends_sentence(word.text):
+            groups.append(current)
+            current = []
+    if current:
+        groups.append(current)
+    return groups
 
 
-def _dialogue(group: list[Word], cfg: CaptionConfig) -> str:
-    start = _timestamp(group[0].start)
-    end = _timestamp(group[-1].end)
+def _ends_sentence(text: str) -> bool:
+    if not _SENTENCE_END.search(text):
+        return False
+    # "Dr." and "U.S." are not sentence ends; the same asymmetry as segment.py.
+    stem = _SENTENCE_END.sub("", text)
+    return not (stem.lower() in _ABBREVIATIONS or len(stem) == 1)
+
+
+#: Kept in step with segment.py's list, for the same reason: a false split
+#: here only shortens a caption, a missed one puts two sentences on screen.
+_ABBREVIATIONS = frozenset(
+    """
+    mr mrs ms mx dr prof rev fr sr jr st mt capt sgt lt col gen gov hon messrs
+    vs etc al cf ibid viz inc ltd dept fig vol ed eds pp approx
+    """.split()
+)
+
+
+def _dialogue(group: list[Word], cfg: CaptionConfig, offset: float = 0.0) -> str:
+    start = _timestamp(group[0].start + offset)
+    end = _timestamp(group[-1].end + offset)
     return f"Dialogue: 0,{start},{end},{STYLE_NAME},,0,0,0,,{_karaoke(group, cfg)}"
 
 

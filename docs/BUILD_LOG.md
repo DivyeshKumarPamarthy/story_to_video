@@ -442,3 +442,52 @@ Listed, not fixed, as the plan asks.
 Finding 1 first — it makes the captions useless. Then 2, which is a single
 offset. Then a test that concatenates two genuinely aligned beats, which is
 what would have caught both.
+
+
+## p9 — caption timing — 2026-09-21
+
+Tests: 30 new fast (270 fast / 8 slow across the project), all passing
+Files: `narrator/captions.py`, `narrator/speech.py`, `narrator/config.py`,
+`tests/test_captions.py`, `tests/test_speech.py`, `CLAUDE.md`
+
+Decisions:
+- The offset is applied at caption-build time and `Beat.words` stay
+  beat-relative, as the plan specifies. That keeps `align` independent of
+  where a beat sits in the video, which is what lets it be tested from a
+  fixture with no pipeline behind it.
+- A beat with no `duration` now raises rather than being treated as zero.
+  Guessing would silently shift every beat after it, which is the same class
+  of bug as the one being fixed.
+- Trimming is an amplitude threshold with a retained pad, not a silence
+  filter in ffmpeg: the trim has to happen before the wav is written, because
+  the wav is what whisper aligns against and what the cache stores.
+- The trim settings are in the cache key. Audio trimmed at a different
+  threshold is different audio.
+- Sentence-aware grouping reuses segment.py's abbreviation asymmetry: a false
+  split only shortens a caption, a missed one puts two sentences on screen.
+
+Tests changed in an earlier module, and why:
+- `tests/test_captions.py`'s `SIMPLE` fixture wrote beat 1's words in
+  whole-video time (1.5-2.4). That is not what `align` produces, and it is
+  exactly why p5, p7 and p8 all passed while the output was wrong. It now
+  starts every beat at 0.0, like the real thing.
+
+Deviations from this plan: none.
+
+Verification of the specific p8 findings:
+- Finding 1 (captions stacked at zero): `test_later_beats_are_offset_into_whole_video_time`,
+  plus the three recorded-fixture concatenation tests the plan asked for.
+- Finding 2 (captions lead the voice): leading silence is trimmed to the pad,
+  asserted through ffprobe in `test_speech_onset_is_within_the_pad_of_zero`.
+- Finding 3 (groups crossing sentences): `test_a_caption_never_holds_two_sentences`.
+
+Known limitations:
+- The offset is only as good as `Beat.duration`. If the assembler ever pads
+  or crossfades between beats, the captions will drift by whatever it adds,
+  and nothing would catch it.
+- Trimming uses a fixed amplitude threshold. A voice that fades in gently
+  loses its first moment; a recording with a noise floor above the threshold
+  is not trimmed at all.
+- The concatenation test uses durations derived from the recorded fixture
+  (last word plus the pad) rather than a real trimmed wav, so it verifies the
+  arithmetic rather than the end-to-end result. p12 is where that is checked.
