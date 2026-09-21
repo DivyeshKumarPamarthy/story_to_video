@@ -69,9 +69,11 @@ Decisions:
 Deviations from this plan: none.
 
 Known limitations:
-- `_synthesize_audio` skips result chunks whose `audio` is `None` and only
-  raises when every chunk is empty. A partial drop would shorten narration and
-  is caught only if the plausibility band notices.
+- ~~`_synthesize_audio` skips result chunks whose `audio` is `None` and only
+  raises when every chunk is empty.~~ **Resolved** after tagging: a chunk with
+  graphemes or phonemes that returns no audio now raises `SynthesisError`. A
+  chunk with neither is padding and is still skipped. The `p2` tag was left in
+  place; see `P2 fix: raise on partial chunk drop`.
 - The fast duration-band test measures a synthetic fixture generated at 15
   chars/sec, so it exercises the wav-writing and ffprobe path rather than the
   model's real pacing. The slow `test_real_synthesis_produces_narration` is

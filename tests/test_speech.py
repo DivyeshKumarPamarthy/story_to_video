@@ -391,6 +391,44 @@ def test_pipeline_yielding_no_audio_raises(tmp_path):
             synthesize([beat()], VOICE, tmp_path)
 
 
+def test_a_dropped_middle_chunk_raises_instead_of_shortening_narration(tmp_path):
+    # The failure this guards: kokoro returns audio for chunks 1 and 3 but not
+    # 2, and the run continues with a sentence silently missing its middle.
+    def gappy_pipeline(text, voice, speed=1.0, **kwargs):
+        yield SimpleNamespace(audio=fake_audio(text), graphemes="The house had been", phonemes="D@")
+        yield SimpleNamespace(audio=None, graphemes="empty for nine", phonemes="Emp")
+        yield SimpleNamespace(audio=fake_audio(text), graphemes="years.", phonemes="jI@z")
+
+    with patch.object(speech, "_pipeline", Mock(return_value=gappy_pipeline)):
+        with pytest.raises(SynthesisError, match="no audio for chunk"):
+            synthesize([beat()], VOICE, tmp_path)
+
+    assert list(tmp_path.glob("*.wav")) == [], "cached a truncated narration"
+
+
+def test_a_dropped_chunk_raises_even_when_only_phonemes_are_present(tmp_path):
+    def gappy_pipeline(text, voice, speed=1.0, **kwargs):
+        yield SimpleNamespace(audio=fake_audio(text), graphemes="The house", phonemes="D@")
+        yield SimpleNamespace(audio=None, graphemes="", phonemes="Empti")
+
+    with patch.object(speech, "_pipeline", Mock(return_value=gappy_pipeline)):
+        with pytest.raises(SynthesisError, match="no audio for chunk"):
+            synthesize([beat()], VOICE, tmp_path)
+
+
+def test_an_empty_chunk_without_text_or_phonemes_is_skipped(tmp_path):
+    # Kokoro yields a result per chunk; one with nothing to say has nothing to
+    # synthesise, so it is not a dropped chunk.
+    def padded_pipeline(text, voice, speed=1.0, **kwargs):
+        yield SimpleNamespace(audio=fake_audio(text), graphemes="The house", phonemes="D@")
+        yield SimpleNamespace(audio=None, graphemes="   ", phonemes="")
+
+    with patch.object(speech, "_pipeline", Mock(return_value=padded_pipeline)):
+        out = synthesize([beat()], VOICE, tmp_path)
+
+    assert out[0].duration == pytest.approx(len(SENTENCE) / 15.0, abs=0.05)
+
+
 def test_multiple_chunks_are_concatenated(tmp_path):
     def two_chunk_pipeline(text, voice, speed=1.0, **kwargs):
         half = fake_audio(text)

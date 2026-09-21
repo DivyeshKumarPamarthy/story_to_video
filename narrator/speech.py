@@ -177,10 +177,35 @@ def _synthesize_audio(text: str, voice: str, cfg: SpeechConfig) -> np.ndarray:
         audio = getattr(result, "audio", None)
         if audio is not None:
             chunks.append(_to_numpy(audio))
+        elif _has_content(result):
+            # Kokoro splits long text into chunks. One that had something to
+            # say and produced nothing would silently cut the middle out of a
+            # sentence, and the result is still plausible enough to pass the
+            # duration band, so it has to be caught here.
+            raise SynthesisError(
+                f"kokoro returned no audio for chunk {_chunk_label(result)} of {_excerpt(text)}"
+            )
 
     if not chunks:
         raise SynthesisError(f"kokoro produced no audio for {_excerpt(text)}")
     return np.concatenate(chunks)
+
+
+def _has_content(result: Any) -> bool:
+    """Did this chunk have anything to synthesise?
+
+    A result with neither graphemes nor phonemes is padding, not a drop.
+    """
+    return bool(_field(result, "graphemes") or _field(result, "phonemes"))
+
+
+def _field(result: Any, name: str) -> str:
+    value = getattr(result, name, "") or ""
+    return str(value).strip()
+
+
+def _chunk_label(result: Any) -> str:
+    return _excerpt(_field(result, "graphemes") or _field(result, "phonemes"), limit=40)
 
 
 @lru_cache(maxsize=4)
