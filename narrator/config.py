@@ -39,3 +39,38 @@ class SpeechConfig:
             raise ValueError(f"sample_rate must be positive, got {self.sample_rate}")
         if self.speed <= 0:
             raise ValueError(f"speed must be positive, got {self.speed}")
+
+
+#: faster-whisper runs through CTranslate2, which has no Metal backend, so
+#: "mps" is not merely slow -- it does not exist. Apple Silicon means cpu.
+ALIGN_DEVICES = ("cpu", "cuda")
+
+
+@dataclass(frozen=True)
+class AlignConfig:
+    """How narration is aligned back to its own text.
+
+    ``base``/``int8`` is the default because alignment runs on audio this
+    project generated from text it already knows: the transcription only has
+    to be good enough to carry timings, and a larger model buys accuracy that
+    the word-count check would reject anyway.
+    """
+
+    model_size: str = "base"
+    compute_type: str = "int8"
+    device: str = "cpu"
+    language: str = "en"
+    beam_size: int = 5
+
+    def __post_init__(self) -> None:
+        if self.device == "mps":
+            raise ValueError(
+                "faster-whisper cannot run on mps: CTranslate2 has no Metal backend. "
+                "Use AlignConfig(device='cpu')"
+            )
+        if self.device not in ALIGN_DEVICES:
+            raise ValueError(
+                f"unknown device {self.device!r}; expected one of {', '.join(ALIGN_DEVICES)}"
+            )
+        if self.beam_size <= 0:
+            raise ValueError(f"beam_size must be positive, got {self.beam_size}")

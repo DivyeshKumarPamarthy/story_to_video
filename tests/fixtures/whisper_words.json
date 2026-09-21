@@ -1,0 +1,125 @@
+{
+  "plain": {
+    "text": "The house had been empty for nine years.",
+    "audio_duration": 2.6,
+    "words": [
+      {
+        "text": " The",
+        "start": 0.0,
+        "end": 0.36
+      },
+      {
+        "text": " house",
+        "start": 0.36,
+        "end": 0.6
+      },
+      {
+        "text": " had",
+        "start": 0.6,
+        "end": 0.74
+      },
+      {
+        "text": " been",
+        "start": 0.74,
+        "end": 0.86
+      },
+      {
+        "text": " empty",
+        "start": 0.86,
+        "end": 1.22
+      },
+      {
+        "text": " for",
+        "start": 1.22,
+        "end": 1.44
+      },
+      {
+        "text": " nine",
+        "start": 1.44,
+        "end": 1.64
+      },
+      {
+        "text": " years.",
+        "start": 1.64,
+        "end": 2.0
+      }
+    ]
+  },
+  "tricky": {
+    "text": "It was 3 a.m. and the ticket cost $40, but she didn't care.",
+    "audio_duration": 4.6,
+    "words": [
+      {
+        "text": " It",
+        "start": 0.0,
+        "end": 0.38
+      },
+      {
+        "text": " was",
+        "start": 0.38,
+        "end": 0.52
+      },
+      {
+        "text": " 3",
+        "start": 0.52,
+        "end": 0.78
+      },
+      {
+        "text": " a",
+        "start": 0.78,
+        "end": 1.02
+      },
+      {
+        "text": ".m.",
+        "start": 1.02,
+        "end": 1.36
+      },
+      {
+        "text": " and",
+        "start": 1.52,
+        "end": 1.56
+      },
+      {
+        "text": " the",
+        "start": 1.56,
+        "end": 1.66
+      },
+      {
+        "text": " ticket",
+        "start": 1.66,
+        "end": 1.86
+      },
+      {
+        "text": " cost",
+        "start": 1.86,
+        "end": 2.1
+      },
+      {
+        "text": " $40,",
+        "start": 2.1,
+        "end": 2.62
+      },
+      {
+        "text": " but",
+        "start": 3.18,
+        "end": 3.42
+      },
+      {
+        "text": " she",
+        "start": 3.42,
+        "end": 3.56
+      },
+      {
+        "text": " didn't",
+        "start": 3.56,
+        "end": 3.78
+      },
+      {
+        "text": " care.",
+        "start": 3.78,
+        "end": 3.98
+      }
+    ]
+  },
+  "_note": "Recorded from faster-whisper base/int8 on wavs produced by narrator.speech (Kokoro-82M, af_heart). Regenerate with tests/test_align_slow.py, not by hand. Note the .m. token in tricky: whisper splits a.m. into two words and marks the continuation by omitting the leading space."
+}

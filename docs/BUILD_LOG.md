@@ -81,3 +81,51 @@ Known limitations:
 - `p1`'s terminal-punctuation test was changed during this step: it asserted
   every beat ends on `.`/`!`/`?`, which is only true when the source text does.
   Now every beat except possibly the last. The `p1` tag was left in place.
+
+
+## p3 — align.py — 2026-09-21
+
+Tests: 33 fast, 3 slow, all passing (104 fast / 8 slow across the project)
+Files: `narrator/align.py`, `tests/test_align.py`,
+`tests/fixtures/whisper_words.json`, `narrator/config.py`, `CLAUDE.md`
+
+Decisions:
+- The transcription is treated as a claim to check, not a source of truth: the
+  audio was generated from text we still have. A word-count mismatch against
+  the normalised reference raises `AlignmentError` rather than returning
+  timings that would drift captions off the narration.
+- Whisper splits some words and signals the continuation by omitting the
+  leading space (`" a"` then `".m."` for "a.m."). Merging on that signal is
+  what keeps counts equal; without it every abbreviation desyncs a beat. This
+  was found by recording real output, not predicted.
+- The fixture is recorded from the real model on real Kokoro audio rather than
+  hand-written, so the fast suite tests behaviour that actually occurred.
+- Overlapping or out-of-order timings raise instead of being clamped. Real
+  output had no overlaps (adjacent words touch exactly), so a clamp would be
+  silently repairing something that should not happen.
+- `AlignConfig` defaults to `base`/`int8`/`cpu`. The model only has to be good
+  enough to carry timings for text we already know; accuracy beyond that is
+  rejected by the count check anyway.
+- `mps` raises a `ValueError` naming CTranslate2 rather than being silently
+  mapped to cpu — faster-whisper has no Metal backend at all.
+- Audio duration is probed from the file rather than read from `Beat.duration`,
+  so the bounds check is against the ground truth and not a field that could
+  be stale.
+
+Deviations from this plan:
+- `AlignConfig` was added to `narrator/config.py`, which is not in this step's
+  file list. CLAUDE.md states config lives there, one frozen dataclass per
+  stage; defining it inside `align.py` would have fragmented config across
+  modules for every later step. Additive only — no existing signature changed.
+
+Known limitations:
+- **Kokoro's synthesis is not reproducible across process state.** The same
+  sentence produces a different wav (verified by sha256) depending on what ran
+  earlier in the process, and whisper then hears "3 a.m." as either three
+  tokens or one. Alignment of such text is therefore correct-or-loud, not
+  always-correct: a story containing "3 a.m." may raise `AlignmentError` on
+  one run and align cleanly on the next. The slow test asserts both branches;
+  the deterministic behaviour is pinned in the fast suite by the fixture.
+- `_merge_continuations` drops whitespace-only tokens silently. A real dropped
+  word would still be caught by the count check.
+- No caching. Alignment re-runs on every pipeline run; resuming is p7's job.

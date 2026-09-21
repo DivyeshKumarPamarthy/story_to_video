@@ -175,3 +175,21 @@ _(empty — fill as we hit them)_
 - **`KPipeline(lang_code="a", model=False)`** reports `.repo_id` without
   downloading any weights — useful for checking metadata in a test without
   paying for a model load.
+- **Kokoro's output is not reproducible across process state.** The same text,
+  voice and config produce a wav with a different sha256 depending on what ran
+  earlier in the process (confirmed by hashing: a clean process and one that
+  had already reloaded the pipeline and touched MPS give different bytes).
+  Consequences: never assert on exact audio or on an exact transcription of it
+  in a slow test, and note that the synthesis cache stores whichever rendering
+  was generated first. Deterministic assertions belong in the fast suite,
+  against recorded fixtures.
+- **faster-whisper cannot use MPS.** It runs through CTranslate2, which has no
+  Metal backend, so Apple Silicon means `device="cpu"` with
+  `compute_type="int8"`. This is not a performance choice.
+- **Whisper marks an intra-word split by omitting the leading space.** Every
+  word it emits normally starts with a space; `a.m.` comes back as `" a"` then
+  `".m."`. Word counts must merge on that signal or every abbreviation
+  desyncs the beat. See `_merge_continuations` in `align.py`.
+- **`uv sync` prunes kokoro's runtime-installed spacy model.** `en_core_web_sm`
+  is fetched by misaki on first real synthesis, and any later `uv sync` removes
+  it as an unmanaged package; the next real run re-downloads it.
