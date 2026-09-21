@@ -69,6 +69,9 @@ stays fast.
   the system Python 3.14 is ahead of torch support.)
 - `ffmpeg` and `ffprobe` from Homebrew, on PATH.
 - Run things with `uv run pytest`, `uv run narrator ...`.
+- TTS deps are an extra: `uv sync --extra tts` (pulls torch, ~2 GB). The first
+  slow run also downloads Kokoro-82M and a spacy model from the network and
+  caches them under `~/.cache/huggingface`. The default suite needs none of it.
 
 ## Workflow
 
@@ -95,6 +98,43 @@ Work directly on `main`. No per-module branches.
 | `p6` | `assemble.py` |
 | `p7` | `pipeline.py` + `cli.py` |
 | `p8` | end-to-end verification pass |
+
+## Config and devices
+
+Config lives in `narrator/config.py` as frozen dataclasses, one per stage.
+**No module hardcodes a device, a sample rate, a resolution or an fps** — it
+takes a config object and a caller may hand it a variant via
+`dataclasses.replace`.
+
+`SpeechConfig` fields: `device`, `sample_rate` (24000, Kokoro's native rate),
+`lang_code`, `speed`, `model_version`.
+
+**`device` defaults to `"cpu"`.** Supported: `cpu`, `mps`, `cuda`. An
+unsupported name raises `ValueError` at construction; a supported one that the
+machine cannot provide raises `SynthesisError` at model-load time. Neither
+falls back silently — a silent fallback to CPU is how a "GPU" benchmark quietly
+measures nothing.
+
+Measured on this machine (M4, 16 GB), Kokoro-82M, best of 3 after warm-up:
+
+| device | model load | synth, best of 3 | vs real time |
+|---|---|---|---|
+| `cpu` | 1.92s | 0.506s | 9.6x |
+| `mps` | 2.38s | 0.385s | 12.6x |
+
+84-character sentence. MPS is 1.3-1.4x faster on synthesis across runs, and
+pays about 0.5s more to load. On a 60-second story (~15-20 beats) that is
+roughly 2 seconds saved on a 10-second job, against a CPU that already runs
+~10x real time. **The default stays `cpu`**; pass `SpeechConfig(device="mps")`
+when batch-rendering something long enough for it to matter.
+
+Reproduce with `uv run pytest -m slow -k benchmark -s`.
+
+`PYTORCH_ENABLE_MPS_FALLBACK=1` is set in `tests/conftest.py` at import time,
+before anything can import torch. MPS does not implement every operator; without
+it an unimplemented op aborts the process rather than falling back to CPU, and
+it has to be set before the first MPS tensor exists, which is why it is not a
+fixture.
 
 ## Output formats
 

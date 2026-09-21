@@ -5,6 +5,8 @@ description = "Turn a text story into a narrated video."
 requires-python = ">=3.12"
 dependencies = [
     "click>=8.1",
+    # Audio is handled as float32 arrays end to end; the wav writer is stdlib.
+    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]

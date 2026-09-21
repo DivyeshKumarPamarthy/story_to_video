@@ -1067,6 +1067,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
+    { name = "numpy" },
 ]
 
 [package.optional-dependencies]
@@ -1093,6 +1094,7 @@ requires-dist = [
     { name = "faster-whisper", marker = "extra == 'align'", specifier = ">=1.0" },
     { name = "httpx", marker = "extra == 'visuals'", specifier = ">=0.27" },
     { name = "kokoro", marker = "extra == 'tts'", specifier = ">=0.9" },
+    { name = "numpy", specifier = ">=1.26" },
     { name = "soundfile", marker = "extra == 'tts'", specifier = ">=0.12" },
 ]
 provides-extras = ["tts", "align", "visuals"]
