@@ -234,3 +234,43 @@ Known limitations:
   minus stopwords, which is a serviceable stock query but not a good one.
 - `require_pexels=True` is untested against a real key, per the deviation
   above.
+
+
+## p5 — captions.py — 2026-09-21
+
+Tests: 22 fast, 0 slow, all passing (197 fast / 8 slow across the project)
+Files: `narrator/captions.py`, `tests/test_captions.py`, `narrator/config.py`
+
+Decisions:
+- The file is parsed back and inspected rather than string-compared. A
+  formatting change that breaks nothing would fail a string comparison, and a
+  timing bug that breaks everything would pass one.
+- Karaoke uses ASS's own `\k` tags rather than one Dialogue line per word:
+  libass then highlights word by word within a line, which is what makes the
+  effect read as karaoke instead of flashing text.
+- In an ASS karaoke style, PrimaryColour is the *sung* colour and
+  SecondaryColour the not-yet-sung one. They are written in that order, which
+  looks inverted in the source and is the opposite of what the names suggest.
+- Grouping never crosses a beat boundary: a caption spanning two beats would
+  sit over a visual cut.
+- Escaping order is backslash first, then braces, or the escapes get escaped.
+  A literal newline is converted to `\N`, since a real newline would end the
+  Dialogue line and silently truncate the caption.
+- `CaptionConfig.preset("vertical")` uses a bigger font, a much higher
+  MarginV and a narrower wrap: a phone held close, in a narrower frame.
+
+Deviations from this plan:
+- **The stated precondition fails.** `ffmpeg -filters | grep -w ass` returns
+  nothing on this machine: the Homebrew build has no libass. The plan says to
+  stop. Under the standing instruction to continue, the step was done anyway,
+  which is defensible because building the .ass file needs no filter --
+  only burning it does, in p6. Recorded in CLAUDE.md gotchas.
+
+Known limitations:
+- **Nothing has rendered these captions.** Every assertion is structural:
+  the file parses, the timings are right, the escaping holds. Whether libass
+  draws them where intended is unverified and cannot be verified here.
+- `wrap_width` is counted in characters, not measured in pixels, so a line of
+  wide glyphs can still overflow a narrow frame.
+- The font name is a string the renderer must resolve. If DejaVu Sans is
+  absent, libass substitutes silently and the layout shifts.

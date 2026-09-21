@@ -130,3 +130,51 @@ class VisualsConfig:
             raise ValueError(f"unknown preset {name!r}; expected one of {', '.join(VIDEO_PRESETS)}")
         width, height = VIDEO_PRESETS[name]
         return cls(width=width, height=height, **overrides)  # type: ignore[arg-type]
+
+
+@dataclass(frozen=True)
+class CaptionConfig:
+    """How burned-in captions look and how words are grouped.
+
+    ``words_per_line`` is what makes captions read as karaoke: one or two
+    words at a time, so the viewer's eye never has to scan.
+    """
+
+    width: int = 1920
+    height: int = 1080
+    words_per_line: int = 2
+    font_name: str = "DejaVu Sans"
+    font_size: int = 64
+    #: Distance from the bottom edge, in the same units as the resolution.
+    margin_v: int = 140
+    #: Hard wrap for a single rendered line, in characters.
+    wrap_width: int = 32
+    primary_colour: str = "&H00FFFFFF"  # white, ASS is &HAABBGGRR
+    highlight_colour: str = "&H0000D7FF"  # amber
+    outline_colour: str = "&H00000000"
+    outline: int = 3
+    shadow: int = 0
+
+    def __post_init__(self) -> None:
+        if self.words_per_line < 1:
+            raise ValueError(f"words_per_line must be at least 1, got {self.words_per_line}")
+        for name in ("width", "height", "font_size", "wrap_width"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be positive, got {getattr(self, name)}")
+        if self.margin_v < 0:
+            raise ValueError(f"margin_v must not be negative, got {self.margin_v}")
+
+    @classmethod
+    def preset(cls, name: str, **overrides: object) -> CaptionConfig:
+        if name not in VIDEO_PRESETS:
+            raise ValueError(f"unknown preset {name!r}; expected one of {', '.join(VIDEO_PRESETS)}")
+        width, height = VIDEO_PRESETS[name]
+        # Vertical is watched on a phone held close: bigger type, higher up,
+        # and a narrower wrap because the frame is narrower.
+        defaults: dict[str, object] = (
+            {"font_size": 86, "margin_v": 420, "wrap_width": 22}
+            if name == "vertical"
+            else {"font_size": 64, "margin_v": 140, "wrap_width": 32}
+        )
+        defaults.update(overrides)
+        return cls(width=width, height=height, **defaults)  # type: ignore[arg-type]
