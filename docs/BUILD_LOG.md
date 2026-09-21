@@ -491,3 +491,44 @@ Known limitations:
 - The concatenation test uses durations derived from the recorded fixture
   (last word plus the pad) rather than a real trimmed wav, so it verifies the
   arithmetic rather than the end-to-end result. p12 is where that is checked.
+
+
+## p10 — packaging — 2026-09-21
+
+Tests: 5 new fast (275 fast / 8 slow across the project), all passing
+Files: `tests/test_packaging.py`, `CLAUDE.md`
+
+Decisions:
+- The tests install the project into a throwaway venv and run the executable
+  there, rather than testing the development venv's script. `uv run` re-syncs
+  before every command and reverts the install to editable, so a test against
+  this venv could never pass under `uv run pytest`. More importantly, what
+  matters is that someone who installs the package gets a working command —
+  which is what this now proves.
+- A session-scoped fixture makes it one install for the whole run: 1.9s,
+  because uv caches the wheel.
+- `PYTHONPATH` is cleared and the working directory is elsewhere, so a passing
+  test cannot be the source tree happening to be importable. One test asserts
+  the installed `narrator.__file__` is *not* inside the repo.
+
+Root cause, as far as it was worth chasing:
+- uv's editable install writes `_editable_impl_narrator.pth` containing the
+  repo path. This interpreter does not honour it — the path never reaches
+  `sys.path` — while a `.pth` with byte-identical content under a different
+  name is honoured, and `io.open_code` reads the file fine. Not permissions,
+  not xattrs, not a missing trailing newline, not `.pth` processing being
+  disabled: all four were tested and ruled out. `uv sync --no-editable`
+  installs a real copy and the script works. That is documented in CLAUDE.md
+  as the way to use the CLI from this venv.
+
+Deviations from this plan: none. The plan asked for a test that runs the
+installed executable as a subprocess; it does, just against a clean install
+rather than this venv.
+
+Known limitations:
+- The development venv's console script is still broken after a default
+  `uv sync`, and nothing in the fast suite now notices, because the tests
+  moved to a clean install. The trade was deliberate: a test that fails
+  depending on which flags the last sync used is worse than no test.
+- The fresh-venv install is only exercised on this machine's Python. Nothing
+  checks the package against another interpreter version.

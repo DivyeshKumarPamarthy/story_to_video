@@ -68,7 +68,17 @@ stays fast.
 - Python 3.12 via `uv`. (The plan said 3.11; 3.12 is what has wheels here and
   the system Python 3.14 is ahead of torch support.)
 - `ffmpeg` and `ffprobe` from Homebrew, on PATH.
-- Run things with `uv run pytest`, `uv run narrator ...`.
+- **To run the CLI from this venv, sync with `uv sync --no-editable`.** uv's
+  editable install writes `_editable_impl_narrator.pth` into site-packages and
+  this interpreter does not honour it, so the `narrator` console script raises
+  `ModuleNotFoundError` while every in-process test passes. An identical file
+  under a different name *is* honoured, which makes no sense and was not worth
+  chasing further. A plain `uv sync` — including the one `uv run` performs
+  before every command — reverts to editable and breaks the script again.
+  `tests/test_packaging.py` deliberately does not depend on this: it installs
+  the project into a throwaway venv and runs the executable there, which is
+  what a user actually gets.
+- Run tests with `uv run pytest`. Run the CLI as `narrator ...` from the venv.
 - TTS deps are an extra: `uv sync --extra tts` (pulls torch, ~2 GB). The first
   slow run also downloads Kokoro-82M and a spacy model from the network and
   caches them under `~/.cache/huggingface`. The default suite needs none of it.
