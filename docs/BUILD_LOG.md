@@ -355,3 +355,90 @@ Known limitations:
   atomic write protects against that, and only for files it wrote.
 - The CLI has one command. There is no way to run a single stage, which is
   what you actually want when debugging a bad render.
+
+
+## p8 — verification — 2026-09-21
+
+Tests: 240 fast, 8 slow, all passing. `ruff check` and `ruff format --check`
+clean. Files: `tests/fixtures/lighthouse_story.txt` (the 300-word story used
+below), `docs/BUILD_LOG.md`.
+
+### Runs
+
+| run | beats | expected | actual | drift |
+|---|---|---|---|---|
+| `tiny_story.txt` (dry run) | 1 | manifest only | manifest only, 0 files rendered | — |
+| `tiny_story.txt` | 1 | — | 9.875s, 1920x1080 @30fps, v1/a1/s1 | +0.000s |
+| `lighthouse_story.txt` (309 words) | 10 | 95.900s (sum of beats) | 95.933s | +0.033s |
+
+The 300-word story took 40s wall clock to produce 96s of video, with real
+Kokoro synthesis and real whisper alignment. Narration paced at ~3.2 words per
+second. All 10 visuals were distinct, no consecutive repeats, no repeat
+anywhere. Alignment matched the reference word count on every beat.
+
+### What is wrong with the output, despite green tests
+
+1. **Captions are stacked at the start of the video.** This is the serious
+   one. `Beat.words` timings are relative to that beat's own audio, and
+   `captions.build_ass` writes them unshifted, so all ten beats' captions
+   begin at zero. The last caption in a 95.93s video ends at **4.80s**, and
+   the file contains 9 backward jumps in time — one per beat boundary.
+   Every test missed it: p5's fixtures were hand-built with words already in
+   global time, and p7's golden fixture is a single beat at the default
+   `max_chars`, so nothing ever concatenated two aligned beats.
+2. **Captions lead the voice by ~0.30s.** Kokoro emits about 0.3s of silence
+   before speaking; whisper reports the first word at 0.000. p6's
+   "narration starts within 50ms of t=0" test passes because its lavfi sine
+   fixture starts instantly, so the real leading silence is never exercised.
+   Measured: 0.304s on the tiny story, 0.324s on the lighthouse story.
+3. **Caption groups cross sentence boundaries.** One line reads
+   "above. Mara" — the end of one sentence and the start of the next, held
+   together on screen. Grouping respects beats but not sentences.
+4. **Every visual is a generated gradient.** With no `PEXELS_API_KEY` the
+   fallback is procedural colour, so the finished video is ten gradients with
+   a slow push-in. It is honest output, not a bug, but it is not what the
+   plan's "stock footage" describes and it looks like it.
+5. **Captions are a soft subtitle track, off by default in most players.**
+   Muxed `mov_text` also carries none of the karaoke highlighting p5 built.
+6. **The installed `narrator` console script does not work.** The editable
+   install uv writes (`_editable_impl_narrator.pth`) is not honoured, so the
+   entry point raises `ModuleNotFoundError: No module named 'narrator'`.
+   Copying the identical file under another name fixes it, which makes no
+   obvious sense and was not worth chasing further. The CLI tests all pass
+   because `CliRunner` imports in-process and never touches the script. Every
+   run above used `python -c "from narrator.cli import main; main()"`.
+
+### Where a failure could be swallowed silently
+
+Listed, not fixed, as the plan asks.
+
+- `pipeline._cached_audio` returns `None` on any mismatch, so a corrupt or
+  truncated wav from a killed run is reused rather than detected. It only
+  checks that a file exists.
+- `pipeline._load_words` swallows `OSError` and `JSONDecodeError` and falls
+  through to realignment. A corrupt cache is indistinguishable from a cold
+  one — which is safe, but the operator is never told.
+- `pipeline._visuals` reuses any `beat_NNN.mp4` in the run directory without
+  checking its duration, resolution or fps. A stale asset from a run at a
+  different preset would be silently concatenated.
+- `visuals.fetch` catches every `PexelsError` and falls back to stills. It
+  logs a WARNING, but a run with a working key that quietly degrades to
+  gradients for half its beats still produces a video and exits 0.
+- `align._merge_continuations` drops whitespace-only tokens, and `_match`
+  drops transcribed tokens that normalise to nothing.
+- Tolerant alignment absorbs word-order errors below the ratio threshold, and
+  interpolated timings for unmatched words are guesses that nothing verifies.
+- `speech._check_plausible` skips text under 20 characters, so a short beat
+  that synthesised to silence passes unnoticed.
+- `captions.build_ass` raises if a beat has no words, but nothing checks that
+  the timings it receives are in the timeline it is writing into — which is
+  exactly how finding 1 survived.
+- `assemble` trusts `Beat.duration` for nothing and ffmpeg for everything: if
+  a beat's asset is shorter than its narration, concat still succeeds and the
+  audio runs past the picture.
+
+### Recommended order for the next round
+
+Finding 1 first — it makes the captions useless. Then 2, which is a single
+offset. Then a test that concatenates two genuinely aligned beats, which is
+what would have caught both.
