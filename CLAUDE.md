@@ -179,6 +179,10 @@ _(empty — fill as we hit them)_
   voice and config produce a wav with a different sha256 depending on what ran
   earlier in the process (confirmed by hashing: a clean process and one that
   had already reloaded the pipeline and touched MPS give different bytes).
+  Seeding torch and pinning it to one thread does **not** fix this — the two
+  orderings still diverge — though it does change the output, so there is RNG
+  in the pipeline somewhere. Two identical fresh processes do agree. Measured,
+  not assumed; see the p3b log entry for the hashes.
   Consequences: never assert on exact audio or on an exact transcription of it
   in a slow test, and note that the synthesis cache stores whichever rendering
   was generated first. Deterministic assertions belong in the fast suite,

@@ -273,9 +273,28 @@ def test_overlapping_words_raise_rather_than_being_clamped(tmp_path):
             align([beat_for(PLAIN, tmp_path)])
 
 
-def test_out_of_order_words_raise(tmp_path):
+def test_two_swapped_words_are_absorbed_rather_than_raising(tmp_path):
+    # Sequence matching finds ordered blocks, so a swap leaves one word
+    # matched and the other interpolated into the gap. The output is still
+    # monotonic, which is the guarantee that matters downstream.
     words = [dict(w) for w in PLAIN["words"]]
     words[3], words[4] = words[4], words[3]
+
+    with patch.object(align_module, "_transcribe", Mock(return_value=words)):
+        out = align([beat_for(PLAIN, tmp_path)])[0]
+
+    assert [w.text for w in out.words] == normalise_words(PLAIN["text"])
+    for earlier, later in zip(out.words, out.words[1:], strict=False):
+        assert earlier.start < later.start
+        assert earlier.end <= later.start
+
+
+def test_non_monotonic_matched_timings_still_raise(tmp_path):
+    # Text order untouched, so every word matches and the timings come
+    # straight from whisper -- a backwards timestamp must not be returned.
+    words = [dict(w) for w in PLAIN["words"]]
+    words[4]["start"] = words[2]["start"]
+    words[4]["end"] = words[2]["end"]
 
     with patch.object(align_module, "_transcribe", Mock(return_value=words)):
         with pytest.raises(AlignmentError):
@@ -285,39 +304,178 @@ def test_out_of_order_words_raise(tmp_path):
 # --- mismatch is never smoothed over ----------------------------------------
 
 
-def test_extra_transcribed_word_raises_alignment_error(tmp_path):
+def test_extra_transcribed_word_is_tolerated(tmp_path):
+    # Whisper hearing one word too many no longer fails the beat: the extra
+    # token simply matches nothing, and every reference word keeps its timing.
     words = [dict(w) for w in PLAIN["words"]]
     words.append({"text": " again", "start": 2.1, "end": 2.3})
 
     with patch.object(align_module, "_transcribe", Mock(return_value=words)):
-        with pytest.raises(AlignmentError, match="9 aligned words.*8 reference"):
-            align([beat_for(PLAIN, tmp_path)])
+        out = align([beat_for(PLAIN, tmp_path)])[0]
+
+    assert [w.text for w in out.words] == normalise_words(PLAIN["text"])
 
 
-def test_missing_transcribed_word_raises_alignment_error(tmp_path):
-    words = [dict(w) for w in PLAIN["words"]][:-1]
+def test_missing_transcribed_word_is_interpolated(tmp_path):
+    # Drop "empty" from the middle of the transcript. The reference word must
+    # still come back, with a timing between its surviving neighbours.
+    words = [dict(w) for w in PLAIN["words"]]
+    dropped = words.pop(4)
+    assert dropped["text"].strip() == "empty"
 
     with patch.object(align_module, "_transcribe", Mock(return_value=words)):
-        with pytest.raises(AlignmentError, match="7 aligned words.*8 reference"):
+        out = align([beat_for(PLAIN, tmp_path)])[0]
+
+    assert [w.text for w in out.words] == normalise_words(PLAIN["text"])
+    interpolated = out.words[4]
+    assert interpolated.text == "empty"
+    assert out.words[3].end <= interpolated.start
+    assert interpolated.end <= out.words[5].start
+
+
+def test_a_dropped_word_between_touching_neighbours_still_gets_a_slot(tmp_path):
+    # The hard case: whisper's words touch exactly, so removing one leaves a
+    # zero-width gap. Time has to be borrowed from a neighbour rather than
+    # producing a zero-length or overlapping word.
+    words = [dict(w) for w in PLAIN["words"]]
+    words[3]["end"] = words[4]["end"]  # word 3 now runs up to where word 5 starts
+    words.pop(4)
+
+    with patch.object(align_module, "_transcribe", Mock(return_value=words)):
+        out = align([beat_for(PLAIN, tmp_path)])[0]
+
+    assert len(out.words) == 8
+    for earlier, later in zip(out.words, out.words[1:], strict=False):
+        assert earlier.start < later.start
+        assert earlier.end <= later.start
+    for word in out.words:
+        assert word.end > word.start
+
+
+def test_garbage_transcript_still_raises(tmp_path):
+    garbage = [
+        {"text": f" {token}", "start": i * 0.2, "end": i * 0.2 + 0.15}
+        for i, token in enumerate("koala bicycle tuesday marmalade quantum".split())
+    ]
+
+    with patch.object(align_module, "_transcribe", Mock(return_value=garbage)):
+        with pytest.raises(AlignmentError, match="match ratio"):
             align([beat_for(PLAIN, tmp_path)])
 
 
 def test_empty_transcription_raises_rather_than_returning_no_words(tmp_path):
     with patch.object(align_module, "_transcribe", Mock(return_value=[])):
-        with pytest.raises(AlignmentError):
+        with pytest.raises(AlignmentError, match="match ratio"):
             align([beat_for(PLAIN, tmp_path)])
 
 
-def test_error_names_the_beat_and_shows_both_texts(tmp_path):
-    words = [dict(w) for w in PLAIN["words"]][:-1]
+def test_error_names_the_beat_and_reports_the_ratio(tmp_path):
+    garbage = [{"text": " koala", "start": 0.0, "end": 0.3}]
 
-    with patch.object(align_module, "_transcribe", Mock(return_value=words)):
+    with patch.object(align_module, "_transcribe", Mock(return_value=garbage)):
         with pytest.raises(AlignmentError) as exc:
             align([beat_for(PLAIN, tmp_path, index=4)])
 
     message = str(exc.value)
     assert "beat 4" in message
+    assert "koala" in message, "the error should show what was heard"
     assert "years." in message, "the error should show what was expected"
+
+
+# --- the collapsed-numeral case, which used to fail the whole beat ----------
+
+
+def collapsed_tricky() -> list[dict]:
+    """TRICKY's recorded words with " 3", " a", ".m." collapsed into " 3am".
+
+    This is what the live model produces on a different rendering of the same
+    sentence -- observed, not invented (see the p3 log entry).
+    """
+    words = [dict(w) for w in TRICKY["words"]]
+    three = next(w for w in words if w["text"] == " 3")
+    dot_m = next(w for w in words if w["text"] == ".m.")
+    collapsed = {"text": " 3am", "start": three["start"], "end": dot_m["end"]}
+    keep = [w for w in words if w["text"] not in (" 3", " a", ".m.")]
+    index = words.index(three)
+    return keep[:index] + [collapsed] + keep[index:]
+
+
+def test_collapsed_numeral_aligns_instead_of_raising(tmp_path):
+    transcript = collapsed_tricky()
+    assert len(transcript) == 12
+    assert len(normalise_words(TRICKY["text"])) == 13
+
+    with patch.object(align_module, "_transcribe", Mock(return_value=transcript)):
+        out = align([beat_for(TRICKY, tmp_path)])[0]
+
+    assert [w.text for w in out.words] == normalise_words(TRICKY["text"])
+
+
+def test_words_carry_reference_text_not_whisper_text(tmp_path):
+    transcript = collapsed_tricky()
+
+    with patch.object(align_module, "_transcribe", Mock(return_value=transcript)):
+        out = align([beat_for(TRICKY, tmp_path)])[0]
+
+    rendered = [w.text for w in out.words]
+    assert "3am" not in rendered, "whisper's rendering leaked into the captions"
+    assert "3" in rendered and "a.m." in rendered
+
+
+def test_interpolated_timings_stay_monotonic_and_inside_the_audio(tmp_path):
+    transcript = collapsed_tricky()
+
+    with patch.object(align_module, "_transcribe", Mock(return_value=transcript)):
+        out = align([beat_for(TRICKY, tmp_path)])[0]
+
+    assert out.words[0].start >= 0
+    assert out.words[-1].end <= TRICKY["audio_duration"] + 0.05
+    for earlier, later in zip(out.words, out.words[1:], strict=False):
+        assert earlier.start < later.start
+        assert earlier.end <= later.start
+    for word in out.words:
+        assert word.end > word.start
+
+
+def test_interpolated_words_sit_between_their_matched_neighbours(tmp_path):
+    # The gap divided is the one between the surviving matched words, which is
+    # wider than the collapsed token itself -- the difference is the silence
+    # around it, and putting a caption there is harmless.
+    transcript = collapsed_tricky()
+
+    with patch.object(align_module, "_transcribe", Mock(return_value=transcript)):
+        out = align([beat_for(TRICKY, tmp_path)])[0]
+
+    was = next(w for w in transcript if w["text"] == " was")
+    and_ = next(w for w in transcript if w["text"] == " and")
+    three = next(w for w in out.words if w.text == "3")
+    am = next(w for w in out.words if w.text == "a.m.")
+
+    assert three.start >= was["end"] - 0.001
+    assert am.end <= and_["start"] + 0.001
+    assert three.end == pytest.approx(am.start), "the gap should be divided, not overlapped"
+
+
+def test_threshold_is_configurable(tmp_path):
+    transcript = collapsed_tricky()
+
+    with patch.object(align_module, "_transcribe", Mock(return_value=transcript)):
+        with pytest.raises(AlignmentError, match="match ratio"):
+            align([beat_for(TRICKY, tmp_path)], cfg=AlignConfig(min_match_ratio=0.99))
+
+        out = align([beat_for(TRICKY, tmp_path)], cfg=AlignConfig(min_match_ratio=0.5))[0]
+
+    assert len(out.words) == 13
+
+
+def test_default_threshold_is_085():
+    assert AlignConfig().min_match_ratio == 0.85
+
+
+@pytest.mark.parametrize("ratio", [0.0, -0.1, 1.5])
+def test_invalid_threshold_raises(ratio):
+    with pytest.raises(ValueError, match="min_match_ratio"):
+        AlignConfig(min_match_ratio=ratio)
 
 
 # --- preconditions ----------------------------------------------------------
@@ -408,17 +566,13 @@ def test_real_alignment_of_generated_narration(tmp_path):
 
 
 @pytest.mark.slow
-def test_real_alignment_of_numerals_is_correct_or_loud_never_wrong(tmp_path):
-    """Kokoro's output for a given sentence is not stable across process
-    state: the same text, voice and config produce a different wav depending
-    on what ran earlier in the process (verified by hashing). Whisper then
-    hears "3 a.m." as either " 3"+" a"+".m." or " 3am", so the aligned count
-    is 13 or 12 for the same input.
+def test_real_alignment_of_numerals_succeeds_whichever_rendering_is_heard(tmp_path):
+    """The case that motivated tolerant alignment.
 
-    The guarantee is therefore not "it always aligns" but "it never returns
-    timings that do not match the text". Both branches are asserted; the
-    deterministic merge behaviour is pinned by the recorded fixture in the
-    fast suite.
+    Kokoro's output is not stable across process state, so whisper hears
+    "3 a.m." as either " 3"+" a"+".m." or " 3am" for the same sentence. Before
+    sequence matching, the second rendering failed the whole beat. Now both
+    align to the 13 reference words.
     """
     from narrator.speech import synthesize
 
@@ -427,15 +581,13 @@ def test_real_alignment_of_numerals_is_correct_or_loud_never_wrong(tmp_path):
         "af_heart",
         tmp_path / "cache",
     )
+    out = align(spoken)[0]
 
-    try:
-        out = align(spoken)[0]
-    except AlignmentError as exc:
-        assert "reference words" in str(exc), "a mismatch must say what did not line up"
-        return
-
-    assert len(out.words) == len(normalise_words(TRICKY["text"]))
+    assert [w.text for w in out.words] == normalise_words(TRICKY["text"])
+    assert out.words[0].start >= 0
+    assert out.words[-1].end <= out.duration + END_TOLERANCE
     for earlier, later in zip(out.words, out.words[1:], strict=False):
+        assert earlier.start < later.start
         assert earlier.end <= later.start
 
 

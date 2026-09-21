@@ -61,6 +61,10 @@ class AlignConfig:
     device: str = "cpu"
     language: str = "en"
     beam_size: int = 5
+    #: Below this, the transcription is not a rendering of the reference text
+    #: and its timings mean nothing. 0.85 tolerates a model that collapses
+    #: "3 a.m." into one token while still rejecting the wrong audio entirely.
+    min_match_ratio: float = 0.85
 
     def __post_init__(self) -> None:
         if self.device == "mps":
@@ -74,3 +78,5 @@ class AlignConfig:
             )
         if self.beam_size <= 0:
             raise ValueError(f"beam_size must be positive, got {self.beam_size}")
+        if not 0 < self.min_match_ratio <= 1:
+            raise ValueError(f"min_match_ratio must be in (0, 1], got {self.min_match_ratio}")

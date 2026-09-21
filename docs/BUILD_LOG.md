@@ -129,3 +129,57 @@ Known limitations:
 - `_merge_continuations` drops whitespace-only tokens silently. A real dropped
   word would still be caught by the count check.
 - No caching. Alignment re-runs on every pipeline run; resuming is p7's job.
+
+
+## p3b — align.py (tolerant) — 2026-09-21
+
+Tests: 46 fast, 3 slow, all passing (116 fast / 8 slow across the project)
+Files: `narrator/align.py`, `narrator/config.py`, `tests/test_align.py`,
+`CLAUDE.md`
+
+Decisions:
+- The strict word-count rule is gone. Reference words and whisper tokens are
+  matched with `difflib.SequenceMatcher` on normalised keys (letters and
+  digits only, so "$40," lines up with "$40"), and only a match ratio below
+  `AlignConfig.min_match_ratio` (0.85) raises. A model that writes "3am" for
+  "3 a.m." no longer fails the beat it appears in.
+- `Beat.words` carries the reference text, never whisper's. Captions must read
+  as the story was written; a test asserts "3am" cannot leak through.
+- Unmatched reference words are interpolated across the gap between their
+  matched neighbours, divided evenly. The gap is wider than the token that
+  replaced them — the difference is silence, and a caption there is harmless.
+- When whisper drops a word whose neighbours touch, there is no gap to divide.
+  Time is borrowed from a neighbour (never below 10ms) rather than emitting a
+  zero-length word, because a caption with no duration never appears. If even
+  borrowing cannot fit it, that raises rather than producing junk.
+- Timings that come straight from whisper are still validated strictly: a
+  backwards or overlapping matched timestamp raises, unchanged from p3.
+
+Deviations from this plan: none. `narrator/speech.py` is listed for this step
+but needed no change — see below.
+
+Determinism investigation (step 3b c), all hashes of the same sentence:
+
+| run | hash |
+|---|---|
+| unseeded, clean process | `e4557c14d75115d0` |
+| unseeded, after pipeline reload + MPS | `3129d45dda12d2a0` |
+| seeded + 1 thread, clean process | `fd54ffc6619ae8f7` |
+| seeded + 1 thread, after reload + MPS | `2d691eb6cbe379b1` |
+| seeded + 1 thread, clean process again | `fd54ffc6619ae8f7` |
+
+`torch.manual_seed(0)` and `torch.set_num_threads(1)` do **not** make output
+reproducible across process state — the two orderings still diverge. They do
+change the bytes, so there is RNG in the pipeline, and two identical fresh
+processes agree. Since seeding buys no reproducibility where it was needed,
+it was not kept in `speech.py`: it would change every cached rendering and
+invalidate existing caches for nothing. Recorded and moved on, per the plan.
+
+Known limitations:
+- Tolerance cuts both ways: two words swapped in the transcript are now
+  absorbed (one matches, the other interpolates) instead of raising. Within
+  the ratio threshold, word-order errors are no longer detected.
+- Interpolated timings are evenly divided guesses, not measurements. For a
+  long unmatched run they will drift against the audio.
+- `_match` silently drops transcribed tokens that normalise to nothing
+  (punctuation-only). They carry no text, so nothing is lost from captions.

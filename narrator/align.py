@@ -13,6 +13,7 @@ imported until it runs.
 
 from __future__ import annotations
 
+import difflib
 import re
 from dataclasses import replace
 from functools import lru_cache
@@ -32,6 +33,12 @@ class AlignmentError(RuntimeError):
 #: Whisper rounds to centiseconds and the last word often lands exactly on the
 #: final sample.
 END_TOLERANCE = 0.05
+
+#: The shortest slot an interpolated word may be given. Only reached when
+#: whisper dropped a word whose neighbours touch, leaving no gap to divide.
+MIN_WORD_DURATION = 0.01
+
+_KEY_STRIP = re.compile(r"[^0-9a-z']+")
 
 _WHITESPACE = re.compile(r"\s+")
 
@@ -58,18 +65,108 @@ def _is_word(token: str) -> bool:
 
 def _align_beat(beat: Beat, cfg: AlignConfig) -> list[Word]:
     audio_path = _require_audio(beat)
-    words = _merge_continuations(_transcribe(audio_path, cfg))
+    transcribed = _merge_continuations(_transcribe(audio_path, cfg))
     reference = normalise_words(beat.text)
 
-    if len(words) != len(reference):
+    if not reference:
+        return []
+
+    timings, ratio = _match(reference, transcribed)
+    if ratio < cfg.min_match_ratio:
         raise AlignmentError(
-            f"beat {beat.index}: {len(words)} aligned words but {len(reference)} reference "
-            f"words. expected {' '.join(reference)!r}, "
-            f"transcribed {' '.join(word.text for word in words)!r}"
+            f"beat {beat.index}: match ratio {ratio:.2f} is below "
+            f"{cfg.min_match_ratio:.2f}. expected {' '.join(reference)!r}, "
+            f"transcribed {' '.join(word.text for word in transcribed)!r}"
         )
 
-    _check_timings(beat, words, _audio_duration(beat, audio_path))
+    audio_duration = _audio_duration(beat, audio_path)
+    words = [
+        Word(text=text, start=start, end=end)
+        for text, (start, end) in zip(
+            reference, _interpolate(beat, timings, audio_duration), strict=True
+        )
+    ]
+    _check_timings(beat, words, audio_duration)
     return words
+
+
+def _match(
+    reference: list[str], transcribed: list[Word]
+) -> tuple[list[tuple[float, float] | None], float]:
+    """Line reference words up with what was heard.
+
+    Matching is on normalised keys, so "$40," lines up with "$40" and "a.m."
+    with "A.M.". A reference word that nothing matched gets ``None`` and is
+    given a timing by interpolation -- the word was spoken, whisper just wrote
+    it differently.
+    """
+    heard = [word for word in transcribed if _key(word.text)]
+    matcher = difflib.SequenceMatcher(
+        a=[_key(word) for word in reference],
+        b=[_key(word.text) for word in heard],
+        autojunk=False,
+    )
+
+    timings: list[tuple[float, float] | None] = [None] * len(reference)
+    for block in matcher.get_matching_blocks():
+        for offset in range(block.size):
+            word = heard[block.b + offset]
+            timings[block.a + offset] = (word.start, word.end)
+
+    return timings, matcher.ratio()
+
+
+def _key(token: str) -> str:
+    """Compare on letters and digits only: punctuation and case are noise."""
+    return _KEY_STRIP.sub("", token.lower().replace("\u2019", "'"))
+
+
+def _interpolate(
+    beat: Beat, timings: list[tuple[float, float] | None], audio_duration: float
+) -> list[tuple[float, float]]:
+    """Give every unmatched reference word a slot between its matched
+    neighbours, dividing the gap they left evenly.
+
+    When whisper dropped a word outright its neighbours can touch, leaving no
+    gap at all. Time is then borrowed from a neighbour rather than emitting a
+    zero-length word, because a caption with no duration never appears.
+    """
+    filled = list(timings)
+    index = 0
+    while index < len(filled):
+        if filled[index] is not None:
+            index += 1
+            continue
+
+        stop = index
+        while stop < len(filled) and filled[stop] is None:
+            stop += 1
+        count = stop - index
+
+        low = filled[index - 1][1] if index > 0 else 0.0
+        high = filled[stop][0] if stop < len(filled) else audio_duration
+        needed = count * MIN_WORD_DURATION
+
+        if high - low < needed and index > 0:
+            neighbour_start = filled[index - 1][0]
+            low = max(neighbour_start + MIN_WORD_DURATION, high - needed)
+            filled[index - 1] = (neighbour_start, low)
+        if high - low < needed and stop < len(filled):
+            neighbour_end = filled[stop][1]
+            high = min(neighbour_end - MIN_WORD_DURATION, low + needed)
+            filled[stop] = (high, neighbour_end)
+        if high - low < needed:
+            raise AlignmentError(
+                f"beat {beat.index}: cannot place {count} unmatched words between "
+                f"{low:.3f}s and {high:.3f}s"
+            )
+
+        step = (high - low) / count
+        for offset in range(count):
+            filled[index + offset] = (low + offset * step, low + (offset + 1) * step)
+        index = stop
+
+    return [timing for timing in filled if timing is not None]
 
 
 def _require_audio(beat: Beat) -> Path:
