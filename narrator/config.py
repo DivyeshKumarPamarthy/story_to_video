@@ -7,7 +7,7 @@ with :func:`dataclasses.replace` without anyone worrying about aliasing.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 #: Torch devices this project knows how to ask for. "cpu" is the default
@@ -129,7 +129,10 @@ class VisualsConfig:
         if name not in VIDEO_PRESETS:
             raise ValueError(f"unknown preset {name!r}; expected one of {', '.join(VIDEO_PRESETS)}")
         width, height = VIDEO_PRESETS[name]
-        return cls(width=width, height=height, **overrides)  # type: ignore[arg-type]
+        settings = dict(overrides)
+        width = int(settings.pop("width", width))  # type: ignore[arg-type]
+        height = int(settings.pop("height", height))  # type: ignore[arg-type]
+        return cls(width=width, height=height, **settings)  # type: ignore[arg-type]
 
 
 @dataclass(frozen=True)
@@ -177,6 +180,9 @@ class CaptionConfig:
             else {"font_size": 64, "margin_v": 140, "wrap_width": 32}
         )
         defaults.update(overrides)
+        # Overrides win: a caller asking for a specific size means it.
+        width = int(defaults.pop("width", width))  # type: ignore[arg-type]
+        height = int(defaults.pop("height", height))  # type: ignore[arg-type]
         return cls(width=width, height=height, **defaults)  # type: ignore[arg-type]
 
 
@@ -216,4 +222,48 @@ class AssembleConfig:
         if name not in VIDEO_PRESETS:
             raise ValueError(f"unknown preset {name!r}; expected one of {', '.join(VIDEO_PRESETS)}")
         width, height = VIDEO_PRESETS[name]
-        return cls(width=width, height=height, **overrides)  # type: ignore[arg-type]
+        settings = dict(overrides)
+        width = int(settings.pop("width", width))  # type: ignore[arg-type]
+        height = int(settings.pop("height", height))  # type: ignore[arg-type]
+        return cls(width=width, height=height, **settings)  # type: ignore[arg-type]
+
+
+@dataclass(frozen=True)
+class PipelineConfig:
+    """Everything the end-to-end build needs, in one object.
+
+    Stage configs are derived from it rather than passed separately, so a
+    preset cannot be applied to the visuals and forgotten for the captions.
+    """
+
+    width: int = 1920
+    height: int = 1080
+    fps: int = 30
+    sample_rate: int = 48000
+    max_chars: int = 220
+    preset_name: str = "landscape"
+    speech: SpeechConfig = field(default_factory=SpeechConfig)
+    align: AlignConfig = field(default_factory=AlignConfig)
+
+    @classmethod
+    def preset(cls, name: str, **overrides: object) -> PipelineConfig:
+        if name not in VIDEO_PRESETS:
+            raise ValueError(f"unknown preset {name!r}; expected one of {', '.join(VIDEO_PRESETS)}")
+        width, height = VIDEO_PRESETS[name]
+        settings: dict[str, object] = {"width": width, "height": height, "preset_name": name}
+        settings.update(overrides)
+        return cls(**settings)  # type: ignore[arg-type]
+
+    def visuals(self) -> VisualsConfig:
+        return VisualsConfig(width=self.width, height=self.height, fps=self.fps)
+
+    def captions(self) -> CaptionConfig:
+        return CaptionConfig.preset(self.preset_name, width=self.width, height=self.height)
+
+    def assemble(self) -> AssembleConfig:
+        return AssembleConfig(
+            width=self.width,
+            height=self.height,
+            fps=self.fps,
+            sample_rate=self.sample_rate,
+        )

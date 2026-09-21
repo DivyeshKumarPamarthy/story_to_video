@@ -314,3 +314,44 @@ Known limitations:
   turn subtitles on. What p5 built is only fully realised once libass exists.
 - Transitions are hard cuts. The plan mentioned crossfades in passing; none
   are implemented.
+
+
+## p7 — pipeline.py + cli.py — 2026-09-21
+
+Tests: 22 fast, 0 slow, all passing (240 fast / 8 slow across the project)
+Files: `narrator/pipeline.py`, `narrator/cli.py`, `tests/test_pipeline.py`,
+`tests/test_cli.py`, `tests/fixtures/tiny_story.txt`, `narrator/config.py`
+
+Decisions:
+- `PipelineConfig` derives the per-stage configs rather than taking them
+  separately, so a preset cannot be applied to the visuals and forgotten for
+  the captions.
+- Resumption is keyed on content, not on a "stage completed" flag: narration
+  is restored only if a wav exists for every beat, and word timings only if
+  the cached text still matches the beat's text. Editing the story therefore
+  invalidates exactly what changed.
+- The voice is validated before any stage runs. A typo would otherwise cost a
+  full segmentation and alignment before speech looked at it.
+- The CLI catches the project's own exception types and exits 1 with one
+  line. A traceback in a user's terminal is a bug report about us.
+- `--dry-run` writes the manifest and returns before anything is synthesised,
+  asserted by a spy rather than by checking for absent files.
+
+Deviations from this plan: none.
+
+Bugs this step found in earlier modules:
+- `CaptionConfig.preset()` and two sibling `preset()` methods raised
+  `TypeError: got multiple values for keyword argument 'width'` whenever a
+  caller overrode width or height. Every preset now lets overrides win. This
+  was invisible until something combined a preset with an override, which p7
+  is the first code to do.
+
+Known limitations:
+- `tiny_story.txt`'s three sentences pack into a single beat at the default
+  `max_chars=220`, so the golden test sets 60. The fixture exercises
+  concatenation only because of that.
+- Resumption trusts the run directory's filenames. A truncated wav from a
+  killed run would be reused rather than detected; only the speech cache's own
+  atomic write protects against that, and only for files it wrote.
+- The CLI has one command. There is no way to run a single stage, which is
+  what you actually want when debugging a bad render.
