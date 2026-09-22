@@ -591,3 +591,27 @@ Known limitations:
   average: a variable-frame-rate asset could pass it and still stutter.
 - `max_fallback_ratio` is a blunt instrument. Half a story on gradients
   passes; half plus one beat fails.
+
+
+## Environment — ffmpeg with libass — 2026-09-22
+
+Not a tagged step; a prerequisite for p12.
+
+`brew uninstall ffmpeg`, `brew tap homebrew-ffmpeg/ffmpeg`,
+`brew install homebrew-ffmpeg/ffmpeg/ffmpeg`. Built in 1m37s, mostly poured
+from bottles. `ffmpeg -filters | grep -w ass` now prints a line and the build
+config carries `--enable-libass`.
+
+Full suite re-run afterwards, since ffmpeg changed underneath it: 292 passed,
+1 skipped, 8 slow passed. The skip is
+`test_requiring_burned_captions_fails_loudly_without_libass`, which is
+unreachable now and says so.
+
+The burn path executed for the first time. Verified beyond the filter list:
+captions were rendered onto a black clip and the frame compared against the
+same frame without them — 7550 bytes against 797, different hashes, so text
+is genuinely drawn rather than the filter merely being accepted.
+
+**p12 is blocked**: `PEXELS_API_KEY` is unset, which is one of this plan's
+stop conditions, and the instruction for this round was not to work around it.
+Nothing for p12 has been started or committed.

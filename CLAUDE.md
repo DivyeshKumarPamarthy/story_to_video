@@ -67,7 +67,8 @@ stays fast.
 - macOS, Apple Silicon (M4, 16 GB). No CUDA — torch runs on CPU or MPS.
 - Python 3.12 via `uv`. (The plan said 3.11; 3.12 is what has wheels here and
   the system Python 3.14 is ahead of torch support.)
-- `ffmpeg` and `ffprobe` from Homebrew, on PATH.
+- `ffmpeg` and `ffprobe` from the `homebrew-ffmpeg/ffmpeg` tap (the stock
+  formula lacks libass), on PATH.
 - **To run the CLI from this venv, sync with `uv sync --no-editable`.** uv's
   editable install writes `_editable_impl_narrator.pth` into site-packages and
   this interpreter does not honour it, so the `narrator` console script raises
@@ -197,13 +198,16 @@ and the fix, so it is not rediscovered three modules later.
 - **Filter arguments treat `:` and `\` as syntax**, so a file path handed to
   a filter (the `ass` filter, for one) has to be escaped or a path with a
   colon in it silently becomes two arguments.
-- **This Homebrew ffmpeg has no libass.** `ffmpeg -filters | grep -w ass`
-  returns nothing: the build lacks `--enable-libass` and
-  `--enable-libfreetype`, so there is no `ass`, `subtitles` or `drawtext`
-  filter. Burning subtitles needs a different ffmpeg build. The formula
-  does not even declare libass as a dependency, so reinstalling does not
-  help; it needs a source build or another binary. `assemble.py` detects
-  this and muxes a soft subtitle track instead, with a warning.
+- **The stock Homebrew ffmpeg has no libass.** Its formula does not even
+  declare it, so reinstalling does not help. `brew uninstall ffmpeg` then
+  `brew install homebrew-ffmpeg/ffmpeg/ffmpeg` gives a build with
+  `--enable-libass`, which is what this machine now runs: `ffmpeg -filters |
+  grep -w ass` prints a line and `assemble.py` burns captions rather than
+  muxing a soft track. Verified by rendering text onto black and comparing
+  frames, not by trusting the filter list.
+- **`assemble.py` still has both paths.** `has_ass_filter()` decides at
+  runtime, so the soft-subtitle fallback is no longer exercised here and its
+  test skips. Anyone on the stock ffmpeg gets soft subtitles and a warning.
 
 ### torch and environment
 
