@@ -614,3 +614,63 @@ def test_recorded_fixture_still_matches_the_live_model(tmp_path):
         f"records as {[w['text'] for w in PLAIN['words']]}: "
         f"re-record tests/fixtures/whisper_words.json"
     )
+
+
+# --- silent failures 5-6 (p8 audit) -----------------------------------------
+
+
+def test_dropped_transcript_tokens_are_reported(tmp_path, caplog):
+    """Item 5: tokens that normalise to nothing vanished without a word."""
+    import logging
+
+    words = [dict(w) for w in PLAIN["words"]]
+    words.insert(3, {"text": " —", "start": 0.74, "end": 0.75})
+
+    with patch.object(align_module, "_transcribe", Mock(return_value=words)):
+        with caplog.at_level(logging.DEBUG, logger="narrator.align"):
+            out = align([beat_for(PLAIN, tmp_path)])[0]
+
+    assert len(out.words) == 8
+    assert any("dropped" in r.message for r in caplog.records), (
+        "a discarded transcript token left no trace"
+    )
+
+
+def test_interpolated_words_are_reported(tmp_path, caplog):
+    """Item 6: interpolated timings are guesses and were never announced."""
+    import logging
+
+    words = [dict(w) for w in PLAIN["words"]]
+    words.pop(4)
+
+    with patch.object(align_module, "_transcribe", Mock(return_value=words)):
+        with caplog.at_level(logging.WARNING, logger="narrator.align"):
+            align([beat_for(PLAIN, tmp_path)])
+
+    assert any("interpolat" in r.message for r in caplog.records), (
+        "a guessed timing was presented as a measured one"
+    )
+
+
+def test_a_clean_alignment_warns_about_nothing(tmp_path, caplog):
+    import logging
+
+    with patch.object(align_module, "_transcribe", recorded(PLAIN)):
+        with caplog.at_level(logging.WARNING, logger="narrator.align"):
+            align([beat_for(PLAIN, tmp_path)])
+
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_a_low_but_passing_ratio_is_reported(tmp_path, caplog):
+    """Item 6: word-order damage under the threshold was absorbed in silence."""
+    import logging
+
+    words = [dict(w) for w in PLAIN["words"]]
+    words[3], words[4] = words[4], words[3]
+
+    with patch.object(align_module, "_transcribe", Mock(return_value=words)):
+        with caplog.at_level(logging.WARNING, logger="narrator.align"):
+            align([beat_for(PLAIN, tmp_path)])
+
+    assert any("ratio" in r.message for r in caplog.records)

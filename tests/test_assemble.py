@@ -271,3 +271,40 @@ def test_ffmpeg_failure_surfaces_stderr(tmp_path, monkeypatch):
     message = str(exc.value)
     assert "ffmpeg" in message.lower()
     assert len(message) > 60, "the exception should carry ffmpeg's own words"
+
+
+# --- silent failure 9 (p8 audit) --------------------------------------------
+
+
+def test_a_visual_shorter_than_its_narration_raises(tmp_path):
+    """Item 9: concat succeeded and the audio ran on past the picture."""
+    beat = make_beat(tmp_path, 0, seconds=1.0)
+    short = lavfi(
+        tmp_path / "short.mp4",
+        "testsrc=size=320x240:rate=12:duration=0.3",
+        ["-pix_fmt", "yuv420p"],
+    )
+    beat = Beat(**{**beat.__dict__, "asset_path": short})
+
+    with pytest.raises(AssembleError, match="shorter than"):
+        assemble([beat], tmp_path / "out.mp4", CFG)
+
+
+def test_a_visual_matching_its_narration_is_fine(tmp_path):
+    beats = [make_beat(tmp_path, 0, seconds=1.0)]
+    out = assemble(beats, tmp_path / "out.mp4", CFG)
+    assert ffprobe.duration(out) == pytest.approx(1.0, abs=0.2)
+
+
+def test_a_longer_visual_is_allowed(tmp_path):
+    # Trimming happens in visuals; a longer asset here is harmless.
+    beat = make_beat(tmp_path, 0, seconds=1.0)
+    longer = lavfi(
+        tmp_path / "long.mp4",
+        "testsrc=size=320x240:rate=12:duration=2.0",
+        ["-pix_fmt", "yuv420p"],
+    )
+    beat = Beat(**{**beat.__dict__, "asset_path": longer})
+
+    out = assemble([beat], tmp_path / "out.mp4", CFG)
+    assert ffprobe.duration(out) == pytest.approx(1.0, abs=0.25)

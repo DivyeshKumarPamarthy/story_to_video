@@ -51,6 +51,11 @@ MAX_CHARS_PER_SECOND = 40.0
 #: Below this, character count says nothing useful about duration.
 PLAUSIBILITY_MIN_CHARS = 20
 
+#: No beat of real narration is this short, whatever its text. Checked
+#: independently of character count, because "Yes." used to skip the
+#: plausibility band entirely and could come back as a click.
+MIN_BEAT_SECONDS = 0.25
+
 
 def synthesize(
     beats: list[Beat],
@@ -149,6 +154,10 @@ def _cache_path(cache_dir: Path, text: str, voice: str, cfg: SpeechConfig) -> Pa
 
 
 def _check_plausible(text: str, duration: float) -> None:
+    if duration < MIN_BEAT_SECONDS:
+        raise SynthesisError(
+            f"synthesis is too short to be speech: {duration:.3f}s for {_excerpt(text)}"
+        )
     if len(text) < PLAUSIBILITY_MIN_CHARS:
         return
     rate = len(text) / duration if duration > 0 else float("inf")

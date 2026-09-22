@@ -186,6 +186,11 @@ and the fix, so it is not rediscovered three modules later.
   narration. `amix=inputs=2:duration=first:normalize=0` is the form that
   leaves the first input alone; `duration=first` also stops a long music track
   outlasting the story.
+- **`concat` does not clip anything to length.** A clip longer than its beat
+  stretches the video past its narration and everything after it slips; a
+  shorter one lets the audio run on over the next beat's picture. Each branch
+  gets `trim=duration=...,setpts=PTS-STARTPTS`, and `assemble` refuses a
+  visual shorter than its narration outright.
 - **`concat` demands identical geometry**, so every clip is put through
   `scale`/`crop`/`setsar=1`/`fps` before it reaches the concat filter. One
   mismatched asset would otherwise fail the entire render.

@@ -260,3 +260,76 @@ def test_music_is_passed_through_to_the_mix(tmp_path, mocked):
     out = build(FIXTURE, tmp_path / "out.mp4", cfg=CFG, run_dir=tmp_path / "run", music=bed)
 
     assert ffprobe.duration(out) == pytest.approx(1.8, abs=0.2)
+
+
+# --- silent failures 1-3 (p8 audit) -----------------------------------------
+
+
+def test_a_truncated_cached_wav_is_not_reused_silently(tmp_path, monkeypatch, mocked, caplog):
+    """Item 1: the cache only checked that a file existed."""
+    import logging
+
+    run_dir = tmp_path / "run"
+    build(FIXTURE, tmp_path / "out.mp4", cfg=CFG, run_dir=run_dir)
+
+    corrupt = sorted((run_dir / "audio").glob("*.wav"))[0]
+    corrupt.write_bytes(b"")
+
+    spy = Mock(side_effect=fake_synthesize)
+    monkeypatch.setattr(pipeline_module.speech, "synthesize", spy)
+
+    with caplog.at_level(logging.WARNING, logger="narrator.pipeline"):
+        build(FIXTURE, tmp_path / "out2.mp4", cfg=CFG, run_dir=run_dir)
+
+    assert spy.call_count == 1, "reused a zero-byte wav"
+    assert any("unusable" in r.message or "re-synth" in r.message for r in caplog.records)
+
+
+def test_a_corrupt_word_cache_says_so_before_realigning(tmp_path, monkeypatch, mocked, caplog):
+    """Item 2: a corrupt cache was indistinguishable from a cold one."""
+    import logging
+
+    run_dir = tmp_path / "run"
+    build(FIXTURE, tmp_path / "out.mp4", cfg=CFG, run_dir=run_dir)
+    (run_dir / "words.json").write_text("{not json at all")
+
+    with caplog.at_level(logging.WARNING, logger="narrator.pipeline"):
+        build(FIXTURE, tmp_path / "out2.mp4", cfg=CFG, run_dir=run_dir)
+
+    assert any("words.json" in r.message for r in caplog.records), (
+        "a corrupt word cache was discarded without a word to the operator"
+    )
+
+
+def test_a_stale_visual_from_another_preset_is_not_reused(tmp_path, monkeypatch, mocked, caplog):
+    """Item 3: any beat_NNN.mp4 was reused, whatever its geometry."""
+    import logging
+    import subprocess
+
+    run_dir = tmp_path / "run"
+    build(FIXTURE, tmp_path / "out.mp4", cfg=CFG, run_dir=run_dir)
+
+    stale = sorted((run_dir / "visuals").glob("beat_*.mp4"))[0]
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=160x120:rate=8:duration=0.6",
+            "-pix_fmt",
+            "yuv420p",
+            str(stale),
+        ],
+        check=True,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="narrator.pipeline"):
+        out = build(FIXTURE, tmp_path / "out2.mp4", cfg=CFG, run_dir=run_dir)
+
+    assert any("beat_000" in r.message for r in caplog.records), "stale asset reused in silence"
+    assert ffprobe.resolution(out) == (320, 240)

@@ -532,3 +532,62 @@ Known limitations:
   depending on which flags the last sync used is worse than no test.
 - The fresh-venv install is only exercised on this machine's Python. Nothing
   checks the package against another interpreter version.
+
+
+## p11 — silent failures — 2026-09-22
+
+Tests: 18 new fast (293 fast / 8 slow across the project), all passing
+Files: `narrator/pipeline.py`, `narrator/visuals/__init__.py`,
+`narrator/align.py`, `narrator/speech.py`, `narrator/captions.py`,
+`narrator/assemble.py`, `narrator/config.py`, their tests, `CLAUDE.md`
+
+The nine items from the p8 audit, in the logged order:
+
+1. **Truncated cached wav reused.** Every cached file is now probed, and an
+   unreadable or absurdly short one sends the stage back to synthesis with a
+   warning. It is also deleted: `speech.synthesize` caches on the same
+   filename, so leaving it would hand the same bad file straight back — the
+   first version of this fix recovered into the identical failure, which the
+   test caught.
+2. **Corrupt word cache discarded in silence.** Realigning is still the
+   recovery, but it now says which file it threw away and why.
+3. **Stale visuals reused.** Each cached `beat_NNN.mp4` is checked for
+   resolution, frame rate and length against the current config and beat; a
+   mismatch re-fetches with a warning naming the beat.
+4. **A failing Pexels key tolerated.** Falling back with no key set is how
+   this project works offline and is logged as a summary. With a key set it
+   means searches are failing, and more than `max_fallback_ratio` (0.5) of
+   beats falling back now raises rather than producing mostly gradients.
+5. **Dropped transcript tokens.** Tokens that normalise to nothing are logged
+   at DEBUG with their text, rather than vanishing.
+6. **Absorbed word-order damage and guessed timings.** A match ratio between
+   the minimum and 0.99 warns that nearby timings are approximate, and any
+   interpolated word warns with a count. A clean alignment stays silent, which
+   is asserted.
+7. **Short beats skipped the plausibility check.** `MIN_BEAT_SECONDS` (0.25s)
+   applies regardless of character count, so "Yes." coming back as a click
+   now raises.
+8. **Captions never checked their timings belonged to the beat.** Words that
+   run past the beat's duration, or backwards, raise `CaptionError`. This is
+   the specific shape of the p8 finding: whole-video times in a beat-relative
+   field.
+9. **Visual shorter than its narration.** `assemble` probes each asset and
+   refuses one that cannot cover its beat, and every clip is trimmed to its
+   own beat so a long asset cannot stretch the video either.
+
+Tests changed in an earlier module, and why:
+- `test_silently_empty_synthesis_raises_rather_than_caching_garbage` asserted
+  the message "implausible". Its fixture is now caught by the new duration
+  floor first, which is an equally correct rejection, so the assertion accepts
+  either.
+
+Deviations from this plan: none.
+
+Known limitations:
+- Items 5 and 6 warn rather than raise. That is the intended behaviour of
+  tolerant alignment, but it means a run with dozens of interpolated words
+  still produces a video; nobody is forced to look at the log.
+- The visual-geometry check trusts ffprobe's `avg_frame_rate`, which is an
+  average: a variable-frame-rate asset could pass it and still stutter.
+- `max_fallback_ratio` is a blunt instrument. Half a story on gradients
+  passes; half plus one beat fails.

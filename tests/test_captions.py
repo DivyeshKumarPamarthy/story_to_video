@@ -398,3 +398,58 @@ def test_each_beat_starts_within_100ms_of_its_own_speech(tmp_path):
             f"beat {beat_.index} captions start {first.start - onset:+.3f}s from its speech"
         )
         offset += beat_.duration
+
+
+# --- silent failure 8 (p8 audit) --------------------------------------------
+
+
+def test_words_outside_the_beat_are_rejected(tmp_path):
+    """Item 8: nothing checked the words were in the timeline being written.
+
+    Words in whole-video time run past their own beat's duration, which is
+    exactly the shape of the bug p8 found.
+    """
+    wrong_timeline = [
+        beat(0, ("The", 0.0, 0.3), ("house", 0.3, 0.7)),
+        Beat(
+            index=1,
+            text="Rain came in.",
+            visual_query="",
+            duration=0.9,
+            words=words(("Rain", 1.5, 1.8), ("came", 1.8, 2.1), ("in.", 2.1, 2.4)),
+        ),
+    ]
+
+    with pytest.raises(CaptionError, match="outside beat 1"):
+        build_ass(wrong_timeline, CFG, tmp_path / "c.ass")
+
+
+def test_words_running_backwards_are_rejected(tmp_path):
+    backwards = [
+        Beat(
+            index=0,
+            text="The house stood.",
+            visual_query="",
+            duration=1.4,
+            words=words(("The", 0.6, 0.9), ("house", 0.0, 0.3), ("stood.", 1.0, 1.2)),
+        )
+    ]
+
+    with pytest.raises(CaptionError, match="order"):
+        build_ass(backwards, CFG, tmp_path / "c.ass")
+
+
+def test_a_small_overshoot_within_tolerance_is_allowed(tmp_path):
+    # Whisper rounds to centiseconds; the last word often lands a hair past.
+    edge = [
+        Beat(
+            index=0,
+            text="The house stood.",
+            visual_query="",
+            duration=1.0,
+            words=words(("The", 0.0, 0.5), ("house", 0.5, 1.02)),
+        )
+    ]
+
+    parsed = parse_ass(build_ass(edge, CFG, tmp_path / "c.ass"))
+    assert len(parsed.events) == 1

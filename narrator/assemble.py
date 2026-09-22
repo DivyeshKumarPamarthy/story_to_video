@@ -16,6 +16,9 @@ from pathlib import Path
 from narrator.beats import Beat
 from narrator.config import AssembleConfig
 
+#: A visual may fall this far short of its narration before it is an error.
+VISUAL_TOLERANCE = 0.05
+
 LOG = logging.getLogger(__name__)
 
 
@@ -90,10 +93,45 @@ def _check(beats: list[Beat], captions: Path | None, music: Path | None) -> None
             if not Path(path).exists():
                 raise AssembleError(f"beat {beat.index} {label} does not exist: {path}")
 
+        # concat does not care that the picture ends before the narration; it
+        # just runs the audio on over the next beat's footage, and every
+        # caption after that point sits on the wrong shot.
+        if beat.duration is not None:
+            visual_seconds = _probe_seconds(beat.asset_path)
+            if visual_seconds < beat.duration - VISUAL_TOLERANCE:
+                raise AssembleError(
+                    f"beat {beat.index} visual is shorter than its narration: "
+                    f"{visual_seconds:.3f}s of picture for {beat.duration:.3f}s of audio "
+                    f"({beat.asset_path})"
+                )
+
     if captions is not None and not Path(captions).exists():
         raise AssembleError(f"captions file does not exist: {captions}")
     if music is not None and not Path(music).exists():
         raise AssembleError(f"music file does not exist: {music}")
+
+
+def _probe_seconds(path: Path) -> float:
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise AssembleError(f"ffprobe failed for {path}: {result.stderr.strip()}")
+    try:
+        return float(result.stdout.strip())
+    except ValueError as exc:
+        raise AssembleError(f"ffprobe gave no duration for {path}") from exc
 
 
 def _command(
@@ -158,6 +196,11 @@ def _filter_complex(
             f"scale={cfg.width}:{cfg.height}:force_original_aspect_ratio=increase,"
             f"crop={cfg.width}:{cfg.height},setsar=1,fps={cfg.fps}"
         )
+        # Trim each clip to its own beat. Without this a long asset stretches
+        # the video past its narration and everything after it slips.
+        seconds = beats[position].duration
+        if seconds is not None:
+            scale += f",trim=duration={seconds:.3f},setpts=PTS-STARTPTS"
         parts.append(f"[{2 * position}:v]{scale}[v{position}]")
         parts.append(f"[{2 * position + 1}:a]aresample={cfg.sample_rate}[a{position}]")
 

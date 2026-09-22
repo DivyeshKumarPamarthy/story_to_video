@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -99,18 +100,22 @@ def _prepare(
 def _narrate(
     beats: list[Beat], voice: str, audio_dir: Path, cfg: PipelineConfig, force: bool
 ) -> list[Beat]:
-    cached = _cached_audio(beats, audio_dir)
+    cached = _cached_audio(beats, voice, audio_dir, cfg)
     if cached is not None and not force:
         LOG.info("reusing narration from %s", audio_dir)
         return cached
     return speech.synthesize(beats, voice, audio_dir, cfg=cfg.speech)
 
 
-def _cached_audio(beats: list[Beat], audio_dir: Path) -> list[Beat] | None:
-    """Narration from a previous run, if it is all still there.
+def _cached_audio(
+    beats: list[Beat], voice: str, audio_dir: Path, cfg: PipelineConfig
+) -> list[Beat] | None:
+    """Narration from a previous run, if all of it is still usable.
 
-    Keyed by the beat text, so editing the story invalidates only what
-    changed -- and the speech cache is keyed the same way underneath.
+    Existence is not enough: a run killed mid-write leaves a truncated or
+    empty wav, and reusing it shortens the narration without anything
+    noticing. Every file is probed, and anything unusable sends the whole
+    stage back to synthesis with a warning rather than being patched around.
     """
     if not audio_dir.exists():
         return None
@@ -118,12 +123,38 @@ def _cached_audio(beats: list[Beat], audio_dir: Path) -> list[Beat] | None:
     index = {path.stem: path for path in audio_dir.glob("*.wav")}
     restored: list[Beat] = []
     for beat in beats:
-        key = speech._cache_path(audio_dir, beat.text, "", speech.SpeechConfig()).stem
+        key = speech._cache_path(audio_dir, beat.text, voice, cfg.speech).stem
         path = index.get(key) or index.get(f"beat_{beat.index:03d}")
         if path is None:
             return None
-        restored.append(replace(beat, audio_path=path, duration=speech.probe_duration(path)))
+
+        problem = _unusable(path)
+        if problem is not None:
+            # Delete it as well as reporting it. speech.synthesize caches on
+            # the same filename, so leaving a bad file in place would have it
+            # handed straight back and the recovery would be imaginary.
+            LOG.warning(
+                "cached narration %s is unusable (%s); deleting it and re-synthesising",
+                path.name,
+                problem,
+            )
+            path.unlink(missing_ok=True)
+            return None
+        duration = speech.probe_duration(path)
+
+        restored.append(replace(beat, audio_path=path, duration=duration))
     return restored
+
+
+def _unusable(path: Path) -> str | None:
+    """Why this cached wav cannot be trusted, or None if it can."""
+    try:
+        duration = speech.probe_duration(path)
+    except speech.SynthesisError:
+        return "ffprobe cannot read it"
+    if duration < speech.MIN_BEAT_SECONDS:
+        return f"only {duration:.3f}s long"
+    return None
 
 
 def _align(beats: list[Beat], run_dir: Path, cfg: PipelineConfig, force: bool) -> list[Beat]:
@@ -153,7 +184,10 @@ def _align(beats: list[Beat], run_dir: Path, cfg: PipelineConfig, force: bool) -
 def _load_words(beats: list[Beat], cache: Path) -> list[Beat] | None:
     try:
         stored = json.loads(cache.read_text())
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError) as exc:
+        # Realigning is the right recovery, but a corrupt cache is worth
+        # knowing about: it usually means a run was killed part way.
+        LOG.warning("discarding unreadable %s (%s); realigning", cache.name, exc)
         return None
 
     restored: list[Beat] = []
@@ -173,13 +207,66 @@ def _load_words(beats: list[Beat], cache: Path) -> list[Beat] | None:
 
 
 def _visuals(beats: list[Beat], visuals_dir: Path, cfg: PipelineConfig, force: bool) -> list[Beat]:
+    """Reuse this run's visuals, but only the ones that still fit.
+
+    A file called beat_003.mp4 from a run at another preset is the wrong
+    size, the wrong frame rate, or too short for the narration it now has to
+    cover. Reusing it produced a video that looked deliberately odd.
+    """
     existing = {path.stem: path for path in visuals_dir.glob("beat_*.mp4")}
     wanted = [f"beat_{beat.index:03d}" for beat in beats]
 
     if not force and all(name in existing for name in wanted):
-        LOG.info("reusing visuals from %s", visuals_dir)
-        return [replace(beat, asset_path=existing[f"beat_{beat.index:03d}"]) for beat in beats]
+        stale = [
+            name
+            for beat, name in zip(beats, wanted, strict=True)
+            if not _asset_fits(existing[name], beat, cfg)
+        ]
+        if not stale:
+            LOG.info("reusing visuals from %s", visuals_dir)
+            return [replace(beat, asset_path=existing[f"beat_{beat.index:03d}"]) for beat in beats]
+        LOG.warning("cached visuals no longer match this run (%s); re-fetching", ", ".join(stale))
     return visuals.fetch_all(beats, cfg.visuals(), visuals_dir)
+
+
+def _asset_fits(path: Path, beat: Beat, cfg: PipelineConfig) -> bool:
+    try:
+        probe = json.loads(
+            subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-print_format",
+                    "json",
+                    "-show_format",
+                    "-show_streams",
+                    str(path),
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+        )
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        return False
+
+    video = next((s for s in probe["streams"] if s["codec_type"] == "video"), None)
+    if video is None:
+        return False
+    if (int(video["width"]), int(video["height"])) != (cfg.width, cfg.height):
+        return False
+
+    numerator, _, denominator = video["avg_frame_rate"].partition("/")
+    fps = float(numerator) / float(denominator or 1)
+    if abs(fps - cfg.fps) > 0.5:
+        return False
+
+    if beat.duration is not None:
+        seconds = float(probe["format"]["duration"])
+        if seconds < beat.duration - 0.05:
+            return False
+    return True
 
 
 def _write_manifest(

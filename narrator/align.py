@@ -14,6 +14,7 @@ imported until it runs.
 from __future__ import annotations
 
 import difflib
+import logging
 import re
 from dataclasses import replace
 from functools import lru_cache
@@ -24,6 +25,8 @@ from narrator.beats import Beat, Word
 from narrator.config import AlignConfig
 from narrator.speech import SynthesisError, probe_duration
 
+LOG = logging.getLogger(__name__)
+
 
 class AlignmentError(RuntimeError):
     """Transcription did not match the text it was supposed to align."""
@@ -33,6 +36,10 @@ class AlignmentError(RuntimeError):
 #: Whisper rounds to centiseconds and the last word often lands exactly on the
 #: final sample.
 END_TOLERANCE = 0.05
+
+#: A ratio below this still aligns, but something was misheard and the
+#: timings around it are approximate. Worth saying so.
+CLEAN_MATCH_RATIO = 0.99
 
 #: The shortest slot an interpolated word may be given. Only reached when
 #: whisper dropped a word whose neighbours touch, leaving no gap to divide.
@@ -72,6 +79,15 @@ def _align_beat(beat: Beat, cfg: AlignConfig) -> list[Word]:
         return []
 
     timings, ratio = _match(reference, transcribed)
+    if cfg.min_match_ratio <= ratio < CLEAN_MATCH_RATIO:
+        # Absorbing a misheard word is the point of tolerant alignment, but
+        # the operator should know the timings near it are approximate.
+        LOG.warning(
+            "beat %d: match ratio %.2f -- some words were misheard, so their "
+            "timings are approximate",
+            beat.index,
+            ratio,
+        )
     if ratio < cfg.min_match_ratio:
         raise AlignmentError(
             f"beat {beat.index}: match ratio {ratio:.2f} is below "
@@ -80,6 +96,15 @@ def _align_beat(beat: Beat, cfg: AlignConfig) -> list[Word]:
         )
 
     audio_duration = _audio_duration(beat, audio_path)
+    guessed = sum(1 for timing in timings if timing is None)
+    if guessed:
+        LOG.warning(
+            "beat %d: %d of %d word timings are interpolated, not measured",
+            beat.index,
+            guessed,
+            len(reference),
+        )
+
     words = [
         Word(text=text, start=start, end=end)
         for text, (start, end) in zip(
@@ -101,6 +126,11 @@ def _match(
     it differently.
     """
     heard = [word for word in transcribed if _key(word.text)]
+    if len(heard) != len(transcribed):
+        dropped = [w.text for w in transcribed if not _key(w.text)]
+        LOG.debug(
+            "dropped %d transcript tokens with no letters or digits: %s", len(dropped), dropped
+        )
     matcher = difflib.SequenceMatcher(
         a=[_key(word) for word in reference],
         b=[_key(word.text) for word in heard],

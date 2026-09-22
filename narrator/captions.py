@@ -153,6 +153,7 @@ def _events(beats: list[Beat], cfg: CaptionConfig) -> str:
             raise CaptionError(
                 f"beat {beat.index} has no word timings; run align before building captions"
             )
+        _check_words_fit(beat)
         if beat.duration is None:
             raise CaptionError(
                 f"beat {beat.index} has no duration, so the beats after it cannot be "
@@ -164,6 +165,38 @@ def _events(beats: list[Beat], cfg: CaptionConfig) -> str:
             lines.append(_dialogue(group, cfg, offset))
         offset += beat.duration
     return "\n".join(lines) + "\n"
+
+
+#: Whisper rounds to centiseconds, so a word may end a hair past its beat.
+BEAT_TOLERANCE = 0.05
+
+
+def _check_words_fit(beat: Beat) -> None:
+    """Are these timings in the beat's own timeline?
+
+    A beat whose words run past its duration is carrying whole-video times,
+    which is the bug that made every caption pile up on the opening shot. It
+    is cheap to detect and impossible to see by eye in the output.
+    """
+    if beat.duration is None:
+        return
+
+    last = beat.words[-1]
+    if last.end > beat.duration + BEAT_TOLERANCE or beat.words[0].start < -BEAT_TOLERANCE:
+        raise CaptionError(
+            f"word timings fall outside beat {beat.index}: "
+            f"{beat.words[0].start:.3f}s-{last.end:.3f}s against a beat of "
+            f"{beat.duration:.3f}s. Beat.words are timed against the beat's own "
+            f"audio, not the whole video"
+        )
+
+    for earlier, later in zip(beat.words, beat.words[1:], strict=False):
+        if later.start < earlier.start:
+            raise CaptionError(
+                f"beat {beat.index} word timings are out of order: "
+                f"{earlier.text!r} at {earlier.start:.3f}s then {later.text!r} at "
+                f"{later.start:.3f}s"
+            )
 
 
 #: A word ending a sentence, allowing for a closing quote or bracket.

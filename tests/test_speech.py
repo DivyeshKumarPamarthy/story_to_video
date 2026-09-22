@@ -176,7 +176,9 @@ def test_silently_empty_synthesis_raises_rather_than_caching_garbage(tmp_path):
     stub = Mock(return_value=fake_audio("x" * 2, CFG))  # ~0.2s for 71 chars
 
     with patch.object(speech, "_synthesize_audio", stub):
-        with pytest.raises(SynthesisError, match="implausible"):
+        # Either guard may catch this fixture: it is both too short outright
+        # and far too fast for its character count.
+        with pytest.raises(SynthesisError, match="implausible|too short"):
             synthesize([beat(long_text)], VOICE, tmp_path)
 
 
@@ -561,3 +563,24 @@ def test_trim_defaults_are_conservative():
 def test_invalid_trim_settings_raise(bad):
     with pytest.raises(ValueError):
         SpeechConfig(**bad)
+
+
+# --- silent failure 7 (p8 audit) --------------------------------------------
+
+
+def test_a_short_beat_that_came_out_silent_still_raises(tmp_path):
+    """Item 7: text under 20 characters skipped the plausibility check."""
+    samples = int(0.05 * CFG.sample_rate)
+    t = np.linspace(0.0, 0.05, samples, endpoint=False, dtype=np.float32)
+    stub = Mock(return_value=(0.3 * np.sin(2 * np.pi * 220.0 * t)).astype(np.float32))
+
+    with patch.object(speech, "_synthesize_audio", stub):
+        with pytest.raises(SynthesisError, match="too short|implausible"):
+            synthesize([beat("Yes.")], VOICE, tmp_path)
+
+
+def test_a_short_beat_of_normal_length_is_accepted(tmp_path):
+    with patch.object(speech, "_synthesize_audio", synth_spy()):
+        out = synthesize([beat("Yes.")], VOICE, tmp_path)[0]
+
+    assert out.duration > speech.MIN_BEAT_SECONDS

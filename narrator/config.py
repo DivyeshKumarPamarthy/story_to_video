@@ -124,6 +124,9 @@ class VisualsConfig:
     #: back to stills. The pipeline stays usable offline by default, but a run
     #: that is meant to use stock footage can insist on it.
     require_pexels: bool = False
+    #: With a key set, the share of beats allowed to fall back to stills
+    #: before the run is treated as broken rather than merely degraded.
+    max_fallback_ratio: float = 0.5
 
     def __post_init__(self) -> None:
         for name in ("width", "height", "fps"):

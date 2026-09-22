@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from unittest.mock import Mock
 
 import pytest
 
@@ -195,3 +196,48 @@ def test_each_beat_gets_its_own_file(tmp_path, monkeypatch):
     monkeypatch.delenv("PEXELS_API_KEY", raising=False)
     out = visuals.fetch_all([beat(0), beat(1)], CFG, tmp_path / "out")
     assert out[0].asset_path != out[1].asset_path
+
+
+# --- silent failure 4 (p8 audit) --------------------------------------------
+
+
+def test_a_key_that_is_set_but_failing_is_not_quietly_tolerated(tmp_path, monkeypatch):
+    """Item 4: half a story silently becoming gradients still exited 0.
+
+    With no key at all, stills are the expected path. With a key present,
+    falling back means something is wrong and the run should say so loudly.
+    """
+    monkeypatch.setenv("PEXELS_API_KEY", "k")
+    monkeypatch.setattr(
+        pexels, "fetch_clip", Mock(side_effect=pexels.PexelsError("502 from upstream"))
+    )
+
+    with pytest.raises(visuals.VisualsError, match="fell back"):
+        visuals.fetch_all([beat(0), beat(1), beat(2)], CFG, tmp_path / "out")
+
+
+def test_occasional_fallback_with_a_key_is_allowed(tmp_path, monkeypatch):
+    monkeypatch.setenv("PEXELS_API_KEY", "k")
+    clip = fake_clip(tmp_path)
+    calls = {"n": 0}
+
+    def sometimes(beat_, cfg, dest, exclude):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise pexels.PexelsError("one bad search")
+        return clip, f"id{calls['n']}"
+
+    monkeypatch.setattr(pexels, "fetch_clip", sometimes)
+
+    out = visuals.fetch_all([beat(0), beat(1), beat(2), beat(4)], CFG, tmp_path / "out")
+    assert all(b.asset_path.exists() for b in out)
+
+
+def test_no_key_at_all_still_renders_without_raising(tmp_path, monkeypatch, caplog):
+    monkeypatch.delenv("PEXELS_API_KEY", raising=False)
+
+    with caplog.at_level(logging.WARNING, logger="narrator.visuals"):
+        out = visuals.fetch_all([beat(0), beat(1)], CFG, tmp_path / "out")
+
+    assert all(b.asset_path.exists() for b in out)
+    assert any("PEXELS_API_KEY" in r.message for r in caplog.records)

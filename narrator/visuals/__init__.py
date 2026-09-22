@@ -40,16 +40,49 @@ def fetch_all(beats: list[Beat], cfg: VisualsConfig, out_dir: Path) -> list[Beat
     out_dir = Path(out_dir)
     fetched: list[Beat] = []
     previous: tuple[str, ...] = ()
+    fallbacks = 0
     for beat in beats:
-        path, asset_id = _fetch(beat, cfg, out_dir, previous)
+        path, asset_id, used_stills = _fetch(beat, cfg, out_dir, previous)
+        fallbacks += used_stills
         fetched.append(replace(beat, asset_path=path))
         previous = (asset_id,)
+
+    if beats and fallbacks:
+        _report_fallbacks(cfg, fallbacks, len(beats))
     return fetched
+
+
+def _report_fallbacks(cfg: VisualsConfig, fallbacks: int, total: int) -> None:
+    """Falling back is expected without a key, and a fault with one.
+
+    Without `PEXELS_API_KEY` stills are simply how this project works offline,
+    and every beat has already said so. With a key set, falling back means
+    searches are failing, and a story that quietly became half gradients
+    still exited 0 before this.
+    """
+    ratio = fallbacks / total
+    try:
+        pexels.api_key(cfg)
+    except pexels.MissingApiKey:
+        LOG.warning(
+            "no %s set: all %d beats used generated stills rather than stock footage",
+            cfg.api_key_env,
+            fallbacks,
+        )
+        return
+
+    if ratio > cfg.max_fallback_ratio:
+        raise VisualsError(
+            f"{fallbacks} of {total} beats fell back to stills despite "
+            f"{cfg.api_key_env} being set. Pexels is failing, and the video would be "
+            f"mostly generated gradients"
+        )
+    LOG.warning("%d of %d beats fell back to stills", fallbacks, total)
 
 
 def _fetch(
     beat: Beat, cfg: VisualsConfig, out_dir: Path, exclude: tuple[str, ...]
-) -> tuple[Path, str]:
+) -> tuple[Path, str, int]:
     out_dir.mkdir(parents=True, exist_ok=True)
     dest = out_dir / f"beat_{beat.index:03d}.mp4"
     seconds = beat.duration or cfg.default_seconds
@@ -63,10 +96,10 @@ def _fetch(
         # like a style choice rather than a missing key or a dead API.
         LOG.warning("pexels unavailable for beat %d (%s); using a still", beat.index, exc)
         stills.render(beat, cfg, dest, exclude=exclude, seconds=seconds)
-        return dest, stills.variant_for(beat, cfg, exclude)
+        return dest, stills.variant_for(beat, cfg, exclude), 1
 
     _conform(source, dest, seconds, cfg)
-    return dest, asset_id
+    return dest, asset_id, 0
 
 
 def _conform(source: Path, dest: Path, seconds: float, cfg: VisualsConfig) -> None:
